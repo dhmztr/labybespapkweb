@@ -1,0 +1,7 @@
+# ALLOWLIST .hs and .nix with .gitignore only
+*
+!*/
+!*.hs
+!*.nix
+!README.md
+!.gitignore
