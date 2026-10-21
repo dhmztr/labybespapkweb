@@ -27,7 +27,7 @@ generujToken = do
   let hex = concatMap byteToHex intarr
   pure hex
 
-type FullAPI = API :<|> SwaggerSchemaUI "swagger-ui" "swagger.json"
+type FullAPI = API :<|> SwaggerSchemaUI "swagger-ui" "swagger.json" :<|> Raw
 
 dokument :: Swagger
 dokument = toSwagger (Proxy :: Proxy API)
@@ -67,9 +67,7 @@ login mv conn user = do
       throwError err401
 
 zdrowie :: MVar (M.Map String String) -> (Handler String)
-zdrowie x = do
-  zaw <- liftIO (readMVar x)
-  return (show (M.size zaw))
+zdrowie x = return "ok"
 ja :: MVar (M.Map String String) -> Maybe String -> Handler String
 ja mv head = case head of
   Just x -> do
@@ -77,7 +75,7 @@ ja mv head = case head of
     maybe (throwError err401) return (M.lookup x mapa)
   Nothing -> throwError err401
 serwer :: MVar (M.Map String String) -> Connection -> Server FullAPI
-serwer x y = (zdrowie x :<|> login x y :<|> ja x) :<|> swaggerSchemaUIServer dokument
+serwer x y = (zdrowie x :<|> login x y :<|> ja x) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do

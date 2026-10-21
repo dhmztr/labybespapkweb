@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Logowanie</title>
+  <style>
+    :root {
+      --tlo: #f4f5f7;
+      --karta: #ffffff;
+      --tekst: #1d2330;
+      --szary: #5b6475;
+      --ramka: #d5d9e0;
+      --akcent: #2f5fd0;
+      --akcent-hover: #244bab;
+      --blad: #b42318;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --tlo: #14171d;
+        --karta: #1e222b;
+        --tekst: #e8eaef;
+        --szary: #a3aaba;
+        --ramka: #3a404d;
+        --akcent: #6d93f2;
+        --akcent-hover: #8aa8f5;
+        --blad: #f97066;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+      background: var(--tlo);
+      color: var(--tekst);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    .karta {
+      width: 100%;
+      max-width: 360px;
+      padding: 32px;
+      background: var(--karta);
+      border: 1px solid var(--ramka);
+      border-radius: 12px;
+    }
+    h1 { margin: 0 0 24px; font-size: 24px; }
+    form { display: flex; flex-direction: column; }
+    label { margin-bottom: 4px; font-size: 14px; color: var(--szary); }
+    input {
+      margin-bottom: 16px;
+      padding: 10px 12px;
+      font: inherit;
+      color: inherit;
+      background: transparent;
+      border: 1px solid var(--ramka);
+      border-radius: 8px;
+    }
+    input:focus { outline: 2px solid var(--akcent); outline-offset: -1px; }
+    button {
+      padding: 10px 16px;
+      font: inherit;
+      font-weight: 600;
+      color: #fff;
+      background: var(--akcent);
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    button:hover:not(:disabled) { background: var(--akcent-hover); }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    .blad { margin: 0 0 16px; color: var(--blad); font-size: 14px; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <!-- elm.js powstaje z: cd frontend && elm make src/Main.elm --output=public/elm.js -->
+  <script src="elm.js"></script>
+  <script>Elm.Main.init({ node: document.getElementById("app") });</script>
+</body>
+</html>

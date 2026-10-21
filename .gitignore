@@ -1,7 +1,15 @@
-# ALLOWLIST .hs and .nix with .gitignore only
 *
+
 !*/
+
 !*.hs
 !*.nix
+
+!*.elm
+!elm.json
+!*.html
 !README.md
 !.gitignore
+
+public/elm.js
+elm-stuff/

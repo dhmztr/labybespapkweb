@@ -18,6 +18,7 @@ pkgs.mkShell {
         servant-swagger
         servant-swagger-ui
         swagger2
+        pkgs.elmPackages.elm
       ]
     ))
   ];
