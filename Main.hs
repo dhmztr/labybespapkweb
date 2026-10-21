@@ -74,7 +74,7 @@ type API =
     :<|> "ja" :> Header "Authorization" String :> Get '[JSON] String
     :<|> "zamowienie" :> Header "Authorization" String :> ReqBody '[JSON] Zamowienie :> Post '[JSON] ZamowienieOdpowiedz
 zamowienie :: MVar (M.Map String String) -> Maybe String -> Zamowienie -> (Handler ZamowienieOdpowiedz)
-zamowienie mv header zamowieniereq = case header of
+zamowienie mv naglowek zamowieniereq = case naglowek of
   (Just x) -> do
     mapa <- liftIO (readMVar mv)
     case (M.lookup x mapa) of
