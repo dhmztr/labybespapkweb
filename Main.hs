@@ -7,6 +7,7 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import Crypto.Random (MonadRandom (getRandomBytes))
 import Data.Aeson
 import Data.ByteString qualified as BS
+import Data.ByteString.Lazy.Char8 qualified as BL8
 import Data.Char (intToDigit)
 import Data.Map qualified as M
 import Data.Password.Argon2
@@ -43,14 +44,48 @@ data Odpowiedz = Odpowiedz
   { token :: String
   }
   deriving (Show, Generic)
+data Zamowienie = Zamowienie
+  { adres_startowy :: String
+  , adres_docelowy :: String
+  , miejsca :: Int
+  }
+  deriving (Show, Generic)
+data ZamowienieOdpowiedz = ZamowienieOdpowiedz
+  { driver_id :: String
+  }
+  deriving (Show, Generic)
 instance FromJSON Logowanie
 instance ToJSON Odpowiedz
 instance ToSchema Logowanie
 instance ToSchema Odpowiedz
+instance FromJSON Zamowienie
+instance ToJSON ZamowienieOdpowiedz
+instance ToSchema Zamowienie
+instance ToSchema ZamowienieOdpowiedz
+zweryfikujZamowienie :: String -> String -> Int -> Either String Zamowienie
+zweryfikujZamowienie x y z
+  | null x = Left "Niepoprawny adres startowy"
+  | null y = Left "Niepoprawna destynacja"
+  | (z > 4) || (z < 1) = Left "Ilosc pasazerow poza zasiegiem"
+  | otherwise = Right (Zamowienie x y z)
 type API =
   "zdrowie" :> Get '[JSON] String
     :<|> "login" :> ReqBody '[JSON] Logowanie :> Post '[JSON] Odpowiedz
     :<|> "ja" :> Header "Authorization" String :> Get '[JSON] String
+    :<|> "zamowienie" :> Header "Authorization" String :> ReqBody '[JSON] Zamowienie :> Post '[JSON] ZamowienieOdpowiedz
+zamowienie :: MVar (M.Map String String) -> Maybe String -> Zamowienie -> (Handler ZamowienieOdpowiedz)
+zamowienie mv header zamowieniereq = case header of
+  (Just x) -> do
+    mapa <- liftIO (readMVar mv)
+    case (M.lookup x mapa) of
+      (Just _) -> do
+        case zweryfikujZamowienie (adres_startowy zamowieniereq) (adres_docelowy zamowieniereq) (miejsca zamowieniereq) of
+          Right _zamowienieOk -> do
+            let odpowiedz = ZamowienieOdpowiedz "kierowca1"
+            return odpowiedz
+          Left powod -> throwError (err400{errBody = (BL8.pack ("Nie mozna ukonczyc zamowienia: " ++ powod))})
+      Nothing -> throwError (err401{errBody = BL8.pack ("Wygasly token ")})
+  Nothing -> throwError (err401{errBody = (BL8.pack "Brak tokenu autoryzujacego")})
 
 login :: MVar (M.Map String String) -> Connection -> Logowanie -> (Handler Odpowiedz)
 login mv conn user = do
@@ -66,8 +101,8 @@ login mv conn user = do
     else
       throwError err401
 
-zdrowie :: MVar (M.Map String String) -> (Handler String)
-zdrowie x = return "ok"
+zdrowie :: (Handler String)
+zdrowie = return "ok"
 ja :: MVar (M.Map String String) -> Maybe String -> Handler String
 ja mv head = case head of
   Just x -> do
@@ -75,7 +110,7 @@ ja mv head = case head of
     maybe (throwError err401) return (M.lookup x mapa)
   Nothing -> throwError err401
 serwer :: MVar (M.Map String String) -> Connection -> Server FullAPI
-serwer x y = (zdrowie x :<|> login x y :<|> ja x) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
+serwer x y = (zdrowie :<|> login x y :<|> ja x :<|> zamowienie x) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do
