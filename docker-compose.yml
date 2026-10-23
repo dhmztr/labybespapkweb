@@ -1,0 +1,46 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: unter_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: unter_user
+      POSTGRES_PASSWORD: unter_password
+      POSTGRES_DB: unter_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+
+  redis:
+    image: redis:7-alpine
+    container_name: unter_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: unter_app
+    restart: always
+    ports:
+      - "8081:8080"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: unter_db
+      PGUSER: unter_user
+      PGPASSWORD: unter_password
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  pgdata:
