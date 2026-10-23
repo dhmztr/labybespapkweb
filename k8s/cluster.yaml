@@ -1,0 +1,176 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: default
+data:
+  init.sql: |
+    CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        role TEXT DEFAULT 'client',
+        is_2fa_enabled BOOLEAN DEFAULT FALSE,
+        two_factor_secret TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS vehicles (
+        id SERIAL PRIMARY KEY,
+        driver_id INT REFERENCES users(id) ON DELETE SET NULL,
+        registration_number TEXT UNIQUE NOT NULL,
+        model TEXT NOT NULL,
+        status TEXT DEFAULT 'offline'
+    );
+
+    CREATE TABLE IF NOT EXISTS rides (
+        id SERIAL PRIMARY KEY,
+        client_id INT REFERENCES users(id),
+        vehicle_id INT REFERENCES vehicles(id),
+        pickup_lat DOUBLE PRECISION NOT NULL,
+        pickup_lng DOUBLE PRECISION NOT NULL,
+        dropoff_lat DOUBLE PRECISION NOT NULL,
+        dropoff_lng DOUBLE PRECISION NOT NULL,
+        status TEXT DEFAULT 'requested',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        token TEXT UNIQUE NOT NULL,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        used BOOLEAN DEFAULT FALSE
+    );
+
+    INSERT INTO users (email, password_hash, role)
+    VALUES (
+        'test@mail.pl',
+        '$argon2id$v=19$m=65536,t=2,p=1$bW9qYXNvbDEyMzQ1Njc4OQ$EqabBC3aUTPQzQHiNNeb5Dv4ZDj5Z8W4j0QUjN2ksQ8',
+        'client'
+    ) ON CONFLICT (email) DO NOTHING;
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: default
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_USER
+              value: unter_user
+            - name: POSTGRES_PASSWORD
+              value: unter_password
+            - name: POSTGRES_DB
+              value: unter_db
+          volumeMounts:
+            - name: init-script
+              mountPath: /docker-entrypoint-initdb.d
+      volumes:
+        - name: init-script
+          configMap:
+            name: postgres-init
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: default
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: default
+spec:
+  type: NodePort
+  selector:
+    app: app
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/dhmztr/labybespapkweb:latest
+          imagePullPolicy: Always
+          env:
+            - name: PGHOST
+              value: postgres
+            - name: PGPORT
+              value: "5432"
+            - name: PGDATABASE
+              value: unter_db
+            - name: PGUSER
+              value: unter_user
+            - name: PGPASSWORD
+              value: unter_password
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PORT
+              value: "6379"
