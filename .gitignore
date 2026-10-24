@@ -10,6 +10,8 @@
 !*.html
 !README.md
 !.gitignore
+!*.yml
+!*.sql
 
 public/elm.js
 elm-stuff/

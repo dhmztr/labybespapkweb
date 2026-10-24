@@ -2,7 +2,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 
+import Control.Concurrent (modifyMVar_)
 import Control.Concurrent.MVar
+import Control.Exception (try)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Crypto.Random (MonadRandom (getRandomBytes))
 import Data.Aeson
@@ -35,7 +37,7 @@ dokument = toSwagger (Proxy :: Proxy API)
 
 passwordHash :: PasswordHash Argon2
 passwordHash = PasswordHash "$argon2id$v=19$m=65536,t=2,p=1$PycdySns1NErahSML9ctNA$9HDgpC/b2j+us2dCmsrSnK4CRv3bHTYinpGDh10KM/0"
-data Logowanie = Logowanie
+data Poswiadczenia = Poswiadczenia
   { email :: String
   , haslo :: String
   }
@@ -54,9 +56,9 @@ data ZamowienieOdpowiedz = ZamowienieOdpowiedz
   { driver_id :: String
   }
   deriving (Show, Generic)
-instance FromJSON Logowanie
+instance FromJSON Poswiadczenia
 instance ToJSON Odpowiedz
-instance ToSchema Logowanie
+instance ToSchema Poswiadczenia
 instance ToSchema Odpowiedz
 instance FromJSON Zamowienie
 instance ToJSON ZamowienieOdpowiedz
@@ -70,9 +72,10 @@ zweryfikujZamowienie x y z
   | otherwise = Right (Zamowienie x y z)
 type API =
   "zdrowie" :> Get '[JSON] String
-    :<|> "login" :> ReqBody '[JSON] Logowanie :> Post '[JSON] Odpowiedz
+    :<|> "login" :> ReqBody '[JSON] Poswiadczenia :> Post '[JSON] Odpowiedz
     :<|> "ja" :> Header "Authorization" String :> Get '[JSON] String
     :<|> "zamowienie" :> Header "Authorization" String :> ReqBody '[JSON] Zamowienie :> Post '[JSON] ZamowienieOdpowiedz
+    :<|> "rejestracja" :> ReqBody '[JSON] Poswiadczenia :> Post '[JSON] Odpowiedz
 zamowienie :: MVar (M.Map String String) -> Maybe String -> Zamowienie -> (Handler ZamowienieOdpowiedz)
 zamowienie mv naglowek zamowieniereq = case naglowek of
   (Just x) -> do
@@ -86,8 +89,20 @@ zamowienie mv naglowek zamowieniereq = case naglowek of
           Left powod -> throwError (err400{errBody = (BL8.pack ("Nie mozna ukonczyc zamowienia: " ++ powod))})
       Nothing -> throwError (err401{errBody = BL8.pack ("Wygasly token ")})
   Nothing -> throwError (err401{errBody = (BL8.pack "Brak tokenu autoryzujacego")})
-
-login :: MVar (M.Map String String) -> Connection -> Logowanie -> (Handler Odpowiedz)
+rejestracja :: MVar (M.Map String String) -> Connection -> Poswiadczenia -> (Handler Odpowiedz)
+rejestracja mv conn user = do
+  let zapytanie = "INSERT INTO users (email,password_hash) Values (?,?)"
+  hash_haslo <- hashPassword $ (mkPassword (T.pack (haslo user)))
+  operacja <- liftIO (try (execute conn zapytanie (email user, unPasswordHash (hash_haslo))))
+  case operacja of
+    Left (e :: SqlError)
+      | sqlState e == "23505" -> throwError err409{errBody = (BL8.pack ("Uzytkownik istnieje"))}
+      | otherwise -> throwError err500{errBody = (BL8.pack ("Nie udalo sie stworzyc konta"))}
+    (Right _) -> do
+      tok <- liftIO (generujToken)
+      liftIO (modifyMVar_ mv (\mapa -> pure (M.insert tok (email user) mapa)))
+      pure (Odpowiedz tok)
+login :: MVar (M.Map String String) -> Connection -> Poswiadczenia -> (Handler Odpowiedz)
 login mv conn user = do
   rows <- (liftIO (query conn "SELECT password_hash FROM users WHERE email = ?" (Only (email user)) :: IO [Only T.Text]))
   let (hash, istnieje) = case rows of
@@ -110,7 +125,7 @@ ja mv head = case head of
     maybe (throwError err401) return (M.lookup x mapa)
   Nothing -> throwError err401
 serwer :: MVar (M.Map String String) -> Connection -> Server FullAPI
-serwer x y = (zdrowie :<|> login x y :<|> ja x :<|> zamowienie x) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
+serwer x y = (zdrowie :<|> login x y :<|> ja x :<|> zamowienie x :<|> rejestracja x y) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do
