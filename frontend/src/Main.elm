@@ -26,8 +26,15 @@ main =
 type alias Model =
     { email : String
     , haslo : String
+    , powtorz : String
+    , tryb : Tryb
     , stan : Stan
     }
+
+
+type Tryb
+    = Logowanie
+    | Rejestracja
 
 
 type Stan
@@ -38,7 +45,7 @@ type Stan
 
 poczatek : Model
 poczatek =
-    { email = "", haslo = "", stan = Formularz Nothing }
+    { email = "", haslo = "", powtorz = "", tryb = Logowanie, stan = Formularz Nothing }
 
 
 
@@ -48,8 +55,12 @@ poczatek =
 type Msg
     = WpisanoEmail String
     | WpisanoHaslo String
+    | WpisanoPowtorz String
+    | PrzelaczTryb
     | Zaloguj
+    | Zarejestruj
     | OdpowiedzLogin (Result Http.Error String)
+    | OdpowiedzRejestracja (Result Http.Error String)
     | OdpowiedzJa String (Result Http.Error String)
     | Wyloguj
 
@@ -63,8 +74,23 @@ update msg model =
         WpisanoHaslo haslo ->
             ( { model | haslo = haslo }, Cmd.none )
 
+        WpisanoPowtorz powtorz ->
+            ( { model | powtorz = powtorz }, Cmd.none )
+
+        PrzelaczTryb ->
+            ( { model | tryb = innyTryb model.tryb, haslo = "", powtorz = "", stan = Formularz Nothing }
+            , Cmd.none
+            )
+
         Zaloguj ->
             ( { model | stan = Wysylanie }, zaloguj model.email model.haslo )
+
+        Zarejestruj ->
+            if model.haslo /= model.powtorz then
+                ( { model | stan = Formularz (Just "Hasła nie są takie same.") }, Cmd.none )
+
+            else
+                ( { model | stan = Wysylanie }, zarejestruj model.email model.haslo )
 
         OdpowiedzLogin (Ok token) ->
             ( model, pobierzJa token )
@@ -72,8 +98,15 @@ update msg model =
         OdpowiedzLogin (Err blad) ->
             ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
 
+        OdpowiedzRejestracja (Ok token) ->
+            -- backend po rejestracji od razu zwraca token, więc logujemy jak po /login
+            ( model, pobierzJa token )
+
+        OdpowiedzRejestracja (Err blad) ->
+            ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
+
         OdpowiedzJa token (Ok email) ->
-            ( { model | haslo = "", stan = Zalogowany { email = email, token = token } }, Cmd.none )
+            ( { model | haslo = "", powtorz = "", stan = Zalogowany { email = email, token = token } }, Cmd.none )
 
         OdpowiedzJa _ (Err blad) ->
             ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
@@ -82,11 +115,24 @@ update msg model =
             ( poczatek, Cmd.none )
 
 
+innyTryb : Tryb -> Tryb
+innyTryb tryb =
+    case tryb of
+        Logowanie ->
+            Rejestracja
+
+        Rejestracja ->
+            Logowanie
+
+
 opisBledu : Http.Error -> String
 opisBledu blad =
     case blad of
         Http.BadStatus 401 ->
             "Nieprawidłowy e-mail lub hasło."
+
+        Http.BadStatus 409 ->
+            "Rejestracja nie powiodła się, spróbuj ponownie."
 
         Http.NetworkError ->
             "Brak połączenia z serwerem."
@@ -100,9 +146,21 @@ opisBledu blad =
 
 
 zaloguj : String -> String -> Cmd Msg
-zaloguj email haslo =
+zaloguj =
+    wyslijPoswiadczenia "/login" OdpowiedzLogin
+
+
+zarejestruj : String -> String -> Cmd Msg
+zarejestruj =
+    wyslijPoswiadczenia "/rejestracja" OdpowiedzRejestracja
+
+
+{-| /login i /rejestracja przyjmują ten sam JSON i odpowiadają tym samym tokenem
+-}
+wyslijPoswiadczenia : String -> (Result Http.Error String -> Msg) -> String -> String -> Cmd Msg
+wyslijPoswiadczenia url naOdpowiedz email haslo =
     Http.post
-        { url = "/login"
+        { url = url
         , body =
             Http.jsonBody
                 (E.object
@@ -110,7 +168,7 @@ zaloguj email haslo =
                     , ( "haslo", E.string haslo )
                     ]
                 )
-        , expect = Http.expectJson OdpowiedzLogin (D.field "token" D.string)
+        , expect = Http.expectJson naOdpowiedz (D.field "token" D.string)
         }
 
 
@@ -151,10 +209,21 @@ view model =
 
 formularz : Model -> Bool -> Maybe String -> List (Html Msg)
 formularz model wysylanie blad =
-    [ h1 [] [ text "Logowanie" ]
-    , form [ onSubmit Zaloguj ]
-        [ label [ for "email" ] [ text "E-mail" ]
-        , input
+    let
+        rejestracja =
+            model.tryb == Rejestracja
+
+        napis logowanie rejestr =
+            if rejestracja then
+                rejestr
+
+            else
+                logowanie
+    in
+    [ h1 [] [ text (napis "Logowanie" "Rejestracja") ]
+    , form [ onSubmit (napis Zaloguj Zarejestruj) ]
+        ([ label [ for "email" ] [ text "E-mail" ]
+         , input
             [ id "email"
             , type_ "email"
             , autocomplete True
@@ -163,8 +232,8 @@ formularz model wysylanie blad =
             , onInput WpisanoEmail
             ]
             []
-        , label [ for "haslo" ] [ text "Hasło" ]
-        , input
+         , label [ for "haslo" ] [ text "Hasło" ]
+         , input
             [ id "haslo"
             , type_ "password"
             , required True
@@ -172,20 +241,39 @@ formularz model wysylanie blad =
             , onInput WpisanoHaslo
             ]
             []
-        , case blad of
-            Just tresc ->
-                p [ class "blad" ] [ text tresc ]
+         ]
+            ++ (if rejestracja then
+                    [ label [ for "powtorz" ] [ text "Powtórz hasło" ]
+                    , input
+                        [ id "powtorz"
+                        , type_ "password"
+                        , required True
+                        , value model.powtorz
+                        , onInput WpisanoPowtorz
+                        ]
+                        []
+                    ]
 
-            Nothing ->
-                text ""
-        , button [ type_ "submit", disabled wysylanie ]
-            [ text
-                (if wysylanie then
-                    "Logowanie…"
+                else
+                    []
+               )
+            ++ [ case blad of
+                    Just tresc ->
+                        p [ class "blad" ] [ text tresc ]
 
-                 else
-                    "Zaloguj się"
-                )
-            ]
-        ]
+                    Nothing ->
+                        text ""
+               , button [ type_ "submit", disabled wysylanie ]
+                    [ text
+                        (if wysylanie then
+                            napis "Logowanie…" "Rejestrowanie…"
+
+                         else
+                            napis "Zaloguj się" "Zarejestruj się"
+                        )
+                    ]
+               ]
+        )
+    , button [ type_ "button", class "link", disabled wysylanie, onClick PrzelaczTryb ]
+        [ text (napis "Nie masz konta? Zarejestruj się" "Masz już konto? Zaloguj się") ]
     ]

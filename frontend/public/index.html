@@ -72,6 +72,17 @@
     button:hover:not(:disabled) { background: var(--akcent-hover); }
     button:disabled { opacity: 0.6; cursor: wait; }
     .blad { margin: 0 0 16px; color: var(--blad); font-size: 14px; }
+    button.link {
+      display: block;
+      margin: 16px auto 0;
+      padding: 0;
+      font-size: 14px;
+      font-weight: 400;
+      color: var(--akcent);
+      background: none;
+      text-decoration: underline;
+    }
+    button.link:hover:not(:disabled) { background: none; color: var(--akcent-hover); }
   </style>
 </head>
 <body>
