@@ -48,6 +48,6 @@ CREATE TABLE IF NOT EXISTS password_reset_tokens (
 INSERT INTO users (email, password_hash, role)
 VALUES (
     'test@mail.pl',
-    '$argon2id$v=19$m=65536,t=2,p=1$bW9qYXNvbDEyMzQ1Njc4OQ$EqabBC3aUTPQzQHiNNeb5Dv4ZDj5Z8W4j0QUjN2ksQ8',
+    '$argon2id$v=19$m=65536,t=2,p=1$U2dNaitySWZaWlBibGh2RXBBSUFHZz09$W1MDmPKIfk8NDdymzC/iZ6rgqNwx0Jp8rZpXAS4Stwc',
     'client'
 ) ON CONFLICT (email) DO NOTHING;
