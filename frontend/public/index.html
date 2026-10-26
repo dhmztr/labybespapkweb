@@ -89,6 +89,17 @@
   <div id="app"></div>
   <!-- elm.js powstaje z: cd frontend && elm make src/Main.elm --output=public/elm.js -->
   <script src="elm.js"></script>
-  <script>Elm.Main.init({ node: document.getElementById("app") });</script>
+  <script>
+    var KLUCZ = "token";
+    var zapamietany = null;
+    try { zapamietany = localStorage.getItem(KLUCZ); } catch (e) {}
+    var app = Elm.Main.init({ node: document.getElementById("app"), flags: zapamietany });
+    app.ports.zapiszToken.subscribe(function (token) {
+      try { localStorage.setItem(KLUCZ, token); } catch (e) {}
+    });
+    app.ports.usunToken.subscribe(function () {
+      try { localStorage.removeItem(KLUCZ); } catch (e) {}
+    });
+  </script>
 </body>
 </html>
