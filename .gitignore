@@ -11,6 +11,12 @@
 !README.md
 !.gitignore
 
+!Dockerfile
+!.dockerignore
+!*.yml
+!*.yaml
+!*.sql
+
 public/elm.js
 elm-stuff/
 .env
