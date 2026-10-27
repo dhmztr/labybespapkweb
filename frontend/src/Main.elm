@@ -1,4 +1,4 @@
-module Main exposing (main)
+port module Main exposing (main)
 
 import Browser
 import Html exposing (Html, button, div, form, h1, input, label, p, text)
@@ -9,10 +9,18 @@ import Json.Decode as D
 import Json.Encode as E
 
 
-main : Program () Model Msg
+port zapiszToken : String -> Cmd msg
+
+
+port usunToken : () -> Cmd msg
+
+
+{-| flagą jest token zapamiętany w localStorage (albo null)
+-}
+main : Program (Maybe String) Model Msg
 main =
     Browser.element
-        { init = \_ -> ( poczatek, Cmd.none )
+        { init = init
         , update = update
         , view = view
         , subscriptions = \_ -> Sub.none
@@ -40,12 +48,25 @@ type Tryb
 type Stan
     = Formularz (Maybe String)
     | Wysylanie
+    | Sprawdzanie
+    | Wylogowany
     | Zalogowany { email : String, token : String }
 
 
 poczatek : Model
 poczatek =
     { email = "", haslo = "", powtorz = "", tryb = Logowanie, stan = Formularz Nothing }
+
+
+init : Maybe String -> ( Model, Cmd Msg )
+init zapamietany =
+    case zapamietany of
+        Just token ->
+            -- sesja z poprzedniej wizyty: sprawdzamy u backendu, czy token nadal działa
+            ( { poczatek | stan = Sprawdzanie }, przywroc token )
+
+        Nothing ->
+            ( poczatek, Cmd.none )
 
 
 
@@ -62,7 +83,10 @@ type Msg
     | OdpowiedzLogin (Result Http.Error String)
     | OdpowiedzRejestracja (Result Http.Error String)
     | OdpowiedzJa String (Result Http.Error String)
+    | OdpowiedzPrzywrocenie String (Result Http.Error String)
     | Wyloguj
+    | OdpowiedzWyloguj (Result Http.Error ())
+    | WrocDoLogowania
 
 
 update : Msg -> Model -> ( Model, Cmd Msg )
@@ -106,12 +130,38 @@ update msg model =
             ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
 
         OdpowiedzJa token (Ok email) ->
-            ( { model | haslo = "", powtorz = "", stan = Zalogowany { email = email, token = token } }, Cmd.none )
+            ( { model | haslo = "", powtorz = "", stan = Zalogowany { email = email, token = token } }
+            , zapiszToken token
+            )
 
         OdpowiedzJa _ (Err blad) ->
             ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
 
+        OdpowiedzPrzywrocenie token (Ok email) ->
+            ( { model | stan = Zalogowany { email = email, token = token } }, Cmd.none )
+
+        OdpowiedzPrzywrocenie _ (Err (Http.BadStatus 401)) ->
+            -- token wygasł albo został unieważniony
+            ( { model | stan = Formularz Nothing }, usunToken () )
+
+        OdpowiedzPrzywrocenie _ (Err blad) ->
+            ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
+
         Wyloguj ->
+            case model.stan of
+                Zalogowany dane ->
+                    -- lokalnie wylogowujemy od razu, nie czekając na backend
+                    ( { poczatek | stan = Wylogowany }
+                    , Cmd.batch [ usunToken (), wylogujNaSerwerze dane.token ]
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
+
+        OdpowiedzWyloguj _ ->
+            ( model, Cmd.none )
+
+        WrocDoLogowania ->
             ( poczatek, Cmd.none )
 
 
@@ -176,13 +226,46 @@ pobierzJa : String -> Cmd Msg
 pobierzJa token =
     Http.request
         { method = "GET"
-        , headers = [ Http.header "Authorization" token ]
+        , headers = [ naglowekBearer token ]
         , url = "/ja"
         , body = Http.emptyBody
         , expect = Http.expectJson (OdpowiedzJa token) D.string
         , timeout = Nothing
         , tracker = Nothing
         }
+
+
+przywroc : String -> Cmd Msg
+przywroc token =
+    Http.request
+        { method = "GET"
+        , headers = [ naglowekBearer token ]
+        , url = "/ja"
+        , body = Http.emptyBody
+        , expect = Http.expectJson (OdpowiedzPrzywrocenie token) D.string
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+wylogujNaSerwerze : String -> Cmd Msg
+wylogujNaSerwerze token =
+    Http.request
+        { method = "POST"
+        , headers = [ naglowekBearer token ]
+        , url = "/wyloguj"
+        , body = Http.emptyBody
+        , expect = Http.expectWhatever OdpowiedzWyloguj
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+{-| backend (/ja, /wyloguj) wymaga prefiksu "Bearer "
+-}
+naglowekBearer : String -> Http.Header
+naglowekBearer token =
+    Http.header "Authorization" ("Bearer " ++ token)
 
 
 
@@ -197,6 +280,15 @@ view model =
                 [ h1 [] [ text "Witaj!" ]
                 , p [] [ text ("Zalogowano jako " ++ dane.email) ]
                 , button [ onClick Wyloguj ] [ text "Wyloguj" ]
+                ]
+
+            Sprawdzanie ->
+                [ p [] [ text "Sprawdzanie sesji…" ] ]
+
+            Wylogowany ->
+                [ h1 [] [ text "Wylogowano" ]
+                , p [] [ text "Zostałeś pomyślnie wylogowany." ]
+                , button [ onClick WrocDoLogowania ] [ text "Zaloguj się ponownie" ]
                 ]
 
             Formularz blad ->
