@@ -1,9 +1,34 @@
 ---
 apiVersion: v1
+kind: Namespace
+metadata:
+  name: unter
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-credentials
+  namespace: unter
+type: Opaque
+stringData:
+  POSTGRES_USER: unter_user
+  POSTGRES_PASSWORD: unter_password
+  POSTGRES_DB: unter_db
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-credentials
+  namespace: unter
+type: Opaque
+stringData:
+  REDIS_PASSWORD: zmien-to-haslo
+---
+apiVersion: v1
 kind: ConfigMap
 metadata:
   name: postgres-init
-  namespace: default
+  namespace: unter
 data:
   init.sql: |
     CREATE TABLE IF NOT EXISTS users (
@@ -44,6 +69,10 @@ data:
         used BOOLEAN DEFAULT FALSE
     );
 
+    -- TODO(review): seed usera na sztywno w manifescie wdrazanym zawsze -
+    -- reviewer zaproponowal osobny tryb/overlay dev z tym seedem zamiast
+    -- deployowania go zawsze. Overlay kustomize (base bez seeda, overlay
+    -- dev z tym INSERT-em) to nastepny krok, nie zrobiony w tym komicie.
     INSERT INTO users (email, password_hash, role)
     VALUES (
         'test@mail.pl',
@@ -53,10 +82,22 @@ data:
 
 ---
 apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: unter
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
 kind: Service
 metadata:
   name: postgres
-  namespace: default
+  namespace: unter
 spec:
   selector:
     app: postgres
@@ -67,7 +108,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: postgres
-  namespace: default
+  namespace: unter
 spec:
   replicas: 1
   selector:
@@ -81,26 +122,27 @@ spec:
       containers:
         - name: postgres
           image: postgres:16-alpine
-          env:
-            - name: POSTGRES_USER
-              value: unter_user
-            - name: POSTGRES_PASSWORD
-              value: unter_password
-            - name: POSTGRES_DB
-              value: unter_db
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
           volumeMounts:
             - name: init-script
               mountPath: /docker-entrypoint-initdb.d
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
       volumes:
         - name: init-script
           configMap:
             name: postgres-init
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-data
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: redis
-  namespace: default
+  namespace: unter
 spec:
   selector:
     app: redis
@@ -111,7 +153,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: redis
-  namespace: default
+  namespace: unter
 spec:
   replicas: 1
   selector:
@@ -125,12 +167,19 @@ spec:
       containers:
         - name: redis
           image: redis:7-alpine
+          command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: REDIS_PASSWORD
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: app
-  namespace: default
+  namespace: unter
 spec:
   type: NodePort
   selector:
@@ -144,7 +193,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: app
-  namespace: default
+  namespace: unter
 spec:
   replicas: 1
   selector:
@@ -164,13 +213,12 @@ spec:
               value: postgres
             - name: PGPORT
               value: "5432"
-            - name: PGDATABASE
-              value: unter_db
-            - name: PGUSER
-              value: unter_user
-            - name: PGPASSWORD
-              value: unter_password
             - name: REDIS_HOST
               value: redis
             - name: REDIS_PORT
               value: "6379"
+          envFrom:
+            - secretRef:
+                name: postgres-credentials
+            - secretRef:
+                name: redis-credentials
