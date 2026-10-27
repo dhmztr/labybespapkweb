@@ -1,0 +1,10 @@
+.git
+.pgdata
+.pgsock
+.env
+dist-newstyle
+.direnv
+result
+k8s
+.github
+README.md
