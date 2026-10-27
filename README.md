@@ -9,10 +9,15 @@ Backend logowania w Haskellu (Servant, argon2id, PostgreSQL) z frontendem w Elmi
 | `GET` | `/` | | strona logowania (Elm) |
 | `GET` | `/zdrowie` | | `200`, liczba aktywnych sesji |
 | `POST` | `/login` | `content-type: application/json` | `200 {"token":"<64 hex>"}` albo `401` |
-| `GET` | `/ja` | `Authorization: <token>` | `200 "<email>"` albo `401` |
+| `POST` | `/rejestracja` | `content-type: application/json` | `200 {"token":"<64 hex>"}` (loguje od razu), `409` gdy email zajęty |
+| `GET` | `/ja` | `Authorization: Bearer <token>` | `200 "<email>"` albo `401` |
+| `POST` | `/wyloguj` | `Authorization: Bearer <token>` | `200` (usuwa token z sesji, zawsze, nawet gdy już nieaktywny) |
+| `POST` | `/zamowienie` | `Authorization: Bearer <token>`, `content-type: application/json` | `200 {"driver_id":"..."}`, `400`/`401` |
 | `GET` | `/swagger-ui` | | interaktywna dokumentacja API |
 
-Ciało `/login`: `{"email":"...","haslo":"..."}`
+Ciało `/login` i `/rejestracja`: `{"email":"...","haslo":"..."}`. Od tej wersji
+nagłówek `Authorization` wymaga prefiksu `Bearer ` — gołego tokenu backend
+już nie przyjmie (`401`).
 
 ## Wymagania
 
@@ -26,8 +31,16 @@ Przy nixie nie instalujesz niczego ręcznie, `shell.nix` ma wszystko.
 
 ## Baza danych
 
-Schemat i dane użytkowników pochodzą z głównego projektu, to nie jest część
-tego repozytorium. Backend wymaga tabeli z dwiema kolumnami:
+Schemat jest w repo: `migrations/001_init.sql` (tabele `users`, `vehicles`,
+`rides`, `password_reset_tokens` + jeden testowy user). Docker Compose
+odpala go automatycznie przy pierwszym starcie kontenera postgresa; przy
+lokalnym `nix-shell` trzeba go wpuścić do bazy ręcznie:
+
+```bash
+./baza.sh psql -d "$PGDATABASE" -f migrations/001_init.sql
+```
+
+Kolumna, na której backend jest szczególnie wyczulony:
 
 | kolumna | typ | uwaga |
 |---|---|---|
@@ -73,7 +86,25 @@ Szybki test z konsoli:
 ```bash
 curl -s -X POST localhost:8080/login -H 'content-type: application/json' \
   -d '{"email":"a@b.pl","haslo":"tajne"}'
+# {"token":"<64 hex>"}
+
+curl -s localhost:8080/ja -H 'Authorization: Bearer <64 hex>'
 ```
+
+## Docker Compose
+
+Alternatywa do `nix-shell` + `runghc` — stawia postgres, redis i appkę
+w kontenerach jedną komendą:
+
+```bash
+cp .env.example .env   # ustawia POSTGRES_USER/PASSWORD/DB
+docker compose up --build
+# appka: http://localhost:8081, postgres na hoście: 5433 (nie 5432, patrz niżej)
+```
+
+Obraz appki buduje się z `Dockerfile` (multistage, finalny obraz bez
+toolchaina Nixa i bez roota). Schemat bazy wchodzi automatycznie
+z `migrations/001_init.sql` przy pierwszym starcie kontenera postgresa.
 
 ## Windows
 
@@ -109,15 +140,17 @@ sh <(curl -L https://nixos.org/nix/install) --daemon
 * weryfikacja hasła wykonuje tę samą pracę dla adresów istniejących
   i nieistniejących, więc czas odpowiedzi nie ujawnia, które konta istnieją
   (zweryfikowane pomiarem: 0,28 s vs 0,31 s, nierozróżnialne)
-* frontend trzyma token wyłącznie w pamięci, bez `localStorage`. Odświeżenie
-  strony wylogowuje, w zamian nie ma czego wykraść z magazynu przeglądarki
-  przy ataku XSS
+* frontend **od tej wersji trzyma token w `localStorage`** (sesja przeżywa
+  odświeżenie strony — przy starcie Elm sprawdza zapamiętany token przez
+  `/ja` i albo wraca do widoku zalogowanego, albo czyści go gdy wygasł).
+  To świadoma zmiana tradeoffu: wygoda logowania-raz-na-dłużej za cenę
+  tego, że udany XSS może wykraść token z `localStorage` — poprzednia
+  wersja (token tylko w pamięci) nie miała tego wektora
+* `/wyloguj` usuwa token z mapy sesji po stronie serwera, nie tylko
+  lokalnie w przeglądarce
 
 ### Czego świadomie brakuje
 
 * wygasania tokenów, mapa sesji rośnie do restartu procesu
-* wylogowania
 * rate limitingu na `/login`. Weryfikacja hasła to około 260 ms i 64 MB RAM,
   wywoływalna anonimowo, więc parametry argon2 i limit żądań to jedna decyzja
-* prefiksu `Bearer` w nagłówku `Authorization`, obecnie przyjmowany jest goły
-  token
