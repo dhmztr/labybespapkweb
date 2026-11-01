@@ -4,7 +4,7 @@
 
 import Types
 import Apis
-import Control.Concurrent (modifyMVar_)
+import Control.Concurrent (threadDelay,modifyMVar_,forkIO )
 import Control.Concurrent.MVar
 import Control.Exception (try)
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -25,6 +25,8 @@ import Servant
 import Servant.Swagger (toSwagger)
 import Servant.Swagger.UI (SwaggerSchemaUI, swaggerSchemaUIServer)
 import Types (WylogujReq)
+import System.Random (randomRIO)
+import Cars (petlaKierowcy)
 
 
 type FullAPI = API :<|> SwaggerSchemaUI "swagger-ui" "swagger.json" :<|> Raw
@@ -36,15 +38,34 @@ type API =
   "zdrowie" :> Get '[JSON] String
     :<|> "login" :> ReqBody '[JSON] Poswiadczenia :> Post '[JSON] Odpowiedz
     :<|> "ja" :> Header "Authorization" String :> Get '[JSON] String
-    :<|> "zamowienie" :> Header "Authorization" String :> ReqBody '[JSON] Zamowienie :> Post '[JSON] ZamowienieOdpowiedz
+    :<|> "zamowienie" :> Header "Authorization" String :> ReqBody '[JSON] Zamowienie :> Post '[JSON] Kierowca
     :<|> "rejestracja" :> ReqBody '[JSON] Poswiadczenia :> Post '[JSON] Odpowiedz
     :<|> "wyloguj" :> Header "Authorization" String :> Post '[JSON] String
-serwer :: MVar (M.Map String String) -> Connection -> Server FullAPI
-serwer x y = (zdrowie :<|> login x y :<|> ja x :<|> zamowienie x :<|> rejestracja x y :<|> wyloguj x) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
+    :<|> "kierowcy" :> Get '[JSON] [Kierowca]
+serwer :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Connection -> Server FullAPI
+serwer mvtokeny mvprzejazdy mvkierowcy conn = (zdrowie :<|> login mvtokeny conn :<|> ja mvtokeny :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy :<|> rejestracja mvtokeny conn :<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy ) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do
   sesje <- newMVar M.empty
   conn <- liftIO (connectPostgreSQL "")
-  run 8080 (serve (Proxy :: Proxy FullAPI) (serwer sesje conn))
+  przejazdy <- newMVar M.empty
+  kierowcy_wiersze <- liftIO (query_ conn "SELECT id FROM vehicles" :: IO [Only Int])
+  kierowcy <- wygeneruj_kierowcow kierowcy_wiersze 
+  let map_kierowcow = M.fromList [(idKierowcy k,k) | k <- kierowcy ]
+  mvkierowcy <- newMVar map_kierowcow 
+  mapM_ (\k -> forkIO (petlaKierowcy mvkierowcy (idKierowcy k))) map_kierowcow 
+  run 8080 (serve (Proxy :: Proxy FullAPI) (serwer sesje przejazdy mvkierowcy conn))
+
+
+wygeneruj_kierowcow :: [Only Int] -> IO [Kierowca]
+wygeneruj_kierowcow [] = return []
+wygeneruj_kierowcow (ident:reszta) = do
+                        lat_start<- randomRIO (51.05,51.15)
+                        lon_start <- randomRIO (16.90,17.10)
+                        miejsca <- randomRIO (2,5)
+                        let kierowca = Kierowca {idKierowcy = show (fromOnly (ident)), lat = lat_start,lon = lon_start,cel = Nothing,wolne_miejsca = miejsca }
+                        reszta_kierowcow <- liftIO( wygeneruj_kierowcow reszta )
+                        return (kierowca:reszta_kierowcow )
+
 

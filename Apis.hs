@@ -24,23 +24,54 @@ import Numeric (showIntAtBase)
 import Servant
 import Servant.Swagger (toSwagger)
 import Servant.Swagger.UI (SwaggerSchemaUI, swaggerSchemaUIServer)
-import Data.List (stripPrefix)
+import Data.List (stripPrefix, minimumBy)
+import GHC.Base (Float)
+import Types (Kierowca (lat, lon))
+import Data.Function (on)
+import Cars (znajdzKierowce)
 
 
 passwordHash :: PasswordHash Argon2
 passwordHash = PasswordHash "$argon2id$v=19$m=65536,t=2,p=1$PycdySns1NErahSML9ctNA$9HDgpC/b2j+us2dCmsrSnK4CRv3bHTYinpGDh10KM/0"
-zamowienie :: MVar (M.Map String String) -> Maybe String -> Zamowienie -> (Handler ZamowienieOdpowiedz)
-zamowienie mv naglowek zamowieniereq = case naglowek of
+kierowcy :: MVar (M.Map String Kierowca) -> Handler ([Kierowca])
+kierowcy mv = do
+                inner <- liftIO (readMVar mv)
+
+                return (M.elems inner)
+zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Maybe String -> Zamowienie -> (Handler Kierowca)
+zamowienie mvtokeny mvprzejazdy mvkierowcy naglowek zamowieniereq = case naglowek of
     (Just rawtok) -> do
         case (stripPrefix "Bearer " rawtok) of
             Just x -> do
-                mapa <- liftIO (readMVar mv)
+                mapa <- liftIO (readMVar mvtokeny)
                 case (M.lookup x mapa) of
-                    (Just _) -> do
-                        case zweryfikujZamowienie (adres_startowy zamowieniereq) (adres_docelowy zamowieniereq) (miejsca zamowieniereq) of
-                            Right _zamowienieOk -> do
-                                let odpowiedz = ZamowienieOdpowiedz "kierowca1"
-                                return odpowiedz
+                    (Just usermail) -> do
+                        przejazdy <- liftIO (readMVar mvprzejazdy )
+                        let mtokenAktywny = M.lookup usermail przejazdy 
+                        dozwolone <- case mtokenAktywny of
+                            Nothing -> return True
+                            Just idkier -> do
+                                mapaKierowcow <- liftIO (readMVar mvkierowcy)
+                                case M.lookup idkier mapaKierowcow of
+                                    Just k  -> return (cel k == Nothing)   -- skonczyl = wolno nowy
+                                    Nothing -> return True
+
+
+                                                            
+
+                        if not dozwolone 
+                            then throwError err409 
+                        else
+                         case zweryfikujZamowienie (lat_startowy zamowieniereq) (lon_startowy zamowieniereq) (lat_koncowy zamowieniereq ) (lon_koncowy zamowieniereq ) (miejsca zamowieniereq) of
+                            Right zamowienieOk -> do
+                                            kierowcymap <-(liftIO (readMVar mvkierowcy ))
+                                            let kierowcy = M.elems kierowcymap 
+                                        
+                                            let kierowca = (znajdzKierowce ((lat_startowy zamowienieOk ) ,(lon_startowy zamowienieOk)) (miejsca zamowienieOk) kierowcy)
+                                            liftIO (modifyMVar_ mvprzejazdy (\mapa -> pure (M.insert usermail (idKierowcy kierowca) mapa)))
+                                            let zmodyfikowany = Kierowca (idKierowcy kierowca ) (lat kierowca) (lon kierowca ) (Just ((lat_koncowy zamowienieOk ),(lon_koncowy zamowienieOk ))) (wolne_miejsca kierowca )
+                                            liftIO (modifyMVar_ mvkierowcy (\mapa -> pure (M.insert (idKierowcy kierowca) zmodyfikowany mapa ) ))
+                                            return zmodyfikowany 
                             Left powod -> throwError (err400{errBody = (BL8.pack ("Nie mozna ukonczyc zamowienia: " ++ powod))})
                     Nothing -> throwError (err401{errBody = BL8.pack ("Wygasly token ")})
             Nothing -> throwError err401
@@ -75,7 +106,7 @@ login mv conn user = do
 zdrowie :: (Handler String)
 zdrowie = return "ok"
 ja :: MVar (M.Map String String) -> Maybe String -> Handler String
-ja mv head = case head of
+ja mv header = case header of
     Just x -> do
         case (stripPrefix "Bearer " x ) of
             Just tok -> do 
@@ -110,9 +141,16 @@ byteToHex number
   wynik = showIntAtBase 16 intToDigit number ""
 
 
-zweryfikujZamowienie :: String -> String -> Int -> Either String Zamowienie
-zweryfikujZamowienie x y z
-  | null x = Left "Niepoprawny adres startowy"
-  | null y = Left "Niepoprawna destynacja"
+zweryfikujZamowienie :: Double -> Double -> Double -> Double -> Int -> Either String Zamowienie
+zweryfikujZamowienie las los lak lok z 
+  | las < 0 = Left "Niepoprawny adres startowy"
+  | los < 0 = Left "Niepoprawny adres startowy"
+  | lok < 0 = Left "Niepoprawny adres docelowy"
+  | lak < 0 = Left "Niepoprawny adres docelowy"
   | (z > 4) || (z < 1) = Left "Ilosc pasazerow poza zasiegiem"
-  | otherwise = Right (Zamowienie x y z)
+  | otherwise = Right (Zamowienie las los lak lok z)
+
+                                    
+    
+                                
+            

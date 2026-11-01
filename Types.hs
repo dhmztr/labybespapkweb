@@ -2,6 +2,7 @@ module Types where
 
 import Data.Aeson
 import Data.Swagger (Swagger, ToSchema)
+import Distribution.Compat.Prelude (Float)
 import GHC.Generics (Generic)
 
 data Poswiadczenia = Poswiadczenia
@@ -18,13 +19,23 @@ data Odpowiedz = Odpowiedz
     }
     deriving (Show, Generic)
 data Zamowienie = Zamowienie
-    { adres_startowy :: String
-    , adres_docelowy :: String
+    { lat_startowy :: Double
+    , lon_startowy :: Double
+    , lat_koncowy :: Double
+    , lon_koncowy :: Double
     , miejsca :: Int
     }
     deriving (Show, Generic)
 data ZamowienieOdpowiedz = ZamowienieOdpowiedz
     { driver_id :: String
+    }
+    deriving (Show, Generic)
+data Kierowca = Kierowca
+    { idKierowcy :: String
+    , lat :: Double
+    , lon :: Double
+    , cel :: Maybe (Double, Double)
+    , wolne_miejsca :: Int
     }
     deriving (Show, Generic)
 
@@ -38,3 +49,5 @@ instance FromJSON WylogujReq
 instance ToSchema WylogujReq
 instance ToSchema Zamowienie
 instance ToSchema ZamowienieOdpowiedz
+instance ToJSON Kierowca
+instance ToSchema Kierowca
