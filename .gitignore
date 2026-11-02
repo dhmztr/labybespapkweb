@@ -22,3 +22,7 @@
 public/elm.js
 elm-stuff/
 .env
+
+!frontend/public/unter3d.js
+!frontend/public/img/
+!frontend/public/img/*.jpg

@@ -81,6 +81,12 @@ Dwie rzeczy, które łatwo przegapić:
 2. `elm.js` nie odbudowuje się sam. Po każdej zmianie w `src/Main.elm`
    powtórz `elm make`.
 
+Grafika 3D (modele aut i mapa Wrocławia) siedzi w `frontend/public/unter3d.js`
+jako dwa custom elementy, `<unter-auto>` i `<unter-miasto>`, które Elm
+renderuje jak zwykłe tagi. Three.js (0.160.0) ładuje się z jsdelivr, a podkład
+mapy z serwerów Esri, więc przeglądarka potrzebuje internetu. Bez WebGL
+strona pokazuje zapasową płaską mapę 2D z Elma.
+
 Szybki test z konsoli:
 
 ```bash
