@@ -96,7 +96,7 @@ limiterIP :: MVar (M.Map String UTCTime) -> Middleware
 limiterIP mv app req respond =
  if pathInfo req `elem` [["login"], ["rejestracja"], ["wystawkomentarz"], ["zamowienie"]]
   then do 
-        let ip = show (remoteHost req)
+        let ip = takeWhile (/= ':') (show (remoteHost req))
         dozwolone <- sprawdzCooldown mv ip 30
         if dozwolone
           then app req respond
