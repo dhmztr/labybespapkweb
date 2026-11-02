@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Logowanie</title>
+  <title>Unter</title>
   <style>
     :root {
       --tlo: #f4f5f7;
@@ -83,6 +83,99 @@
       text-decoration: underline;
     }
     button.link:hover:not(:disabled) { background: none; color: var(--akcent-hover); }
+
+    /* --- aplikacja po zalogowaniu --- */
+    .karta.szeroka { max-width: 760px; }
+    .szary { color: var(--szary); font-size: 14px; }
+    .info { margin: 0 0 16px; color: #1a7f37; font-size: 14px; }
+    h1.podtytul { margin: 24px 0 12px; font-size: 18px; }
+    select, textarea {
+      width: 100%;
+      margin-bottom: 16px;
+      padding: 10px 12px;
+      font: inherit;
+      color: inherit;
+      background: var(--karta);
+      border: 1px solid var(--ramka);
+      border-radius: 8px;
+    }
+    select:focus, textarea:focus { outline: 2px solid var(--akcent); outline-offset: -1px; }
+    textarea { resize: vertical; }
+
+    .gora { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .zakladki, .przelacznik { display: flex; flex-wrap: wrap; gap: 8px; }
+    .przelacznik { margin-bottom: 12px; }
+    .uzytkownik { display: flex; align-items: center; gap: 12px; }
+    .uzytkownik button.link { display: inline; margin: 0; }
+    button.zakladka {
+      padding: 6px 14px;
+      color: var(--tekst);
+      background: transparent;
+      border: 1px solid var(--ramka);
+    }
+    button.zakladka.aktywna { color: #fff; background: var(--akcent); border-color: var(--akcent); }
+    button.zakladka:hover:not(:disabled):not(.aktywna) { background: var(--tlo); }
+    button.maly { padding: 4px 10px; font-size: 14px; }
+    button.drugi { color: var(--tekst); background: transparent; border: 1px solid var(--ramka); }
+    button.drugi:hover:not(:disabled) { background: var(--tlo); }
+    .przyciski { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+
+    .mapa {
+      position: relative;
+      width: 100%;
+      max-width: 460px;
+      aspect-ratio: 1 / 1;
+      margin: 0 auto 12px;
+      border: 1px solid var(--ramka);
+      border-radius: 8px;
+      background-color: var(--tlo);
+      background-image:
+        linear-gradient(var(--ramka) 1px, transparent 1px),
+        linear-gradient(90deg, var(--ramka) 1px, transparent 1px);
+      background-size: 25% 25%;
+      overflow: hidden;
+    }
+    .mapa.klikalna { cursor: crosshair; }
+    .mapa > * { pointer-events: none; }
+    .auto, .punkt {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      display: grid;
+      place-items: center;
+      min-width: 22px;
+      height: 22px;
+      padding: 0 4px;
+      border-radius: 11px;
+      color: #fff;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .auto { background: #1a7f37; }
+    .auto.zajete { background: #d97706; }
+    .punkt { border-radius: 4px; z-index: 2; }
+    .punkt.start { background: #2f5fd0; }
+    .punkt.cel { background: #b42318; }
+    .legenda { margin: 0 0 16px; text-align: center; color: var(--szary); font-size: 14px; }
+    .kropka, .znak { display: inline-block; vertical-align: middle; }
+    .kropka { width: 12px; height: 12px; border-radius: 50%; }
+    .kropka.wolne { background: #1a7f37; }
+    .kropka.zajete { background: #d97706; }
+    .znak { width: 18px; height: 18px; border-radius: 4px; color: #fff; font-size: 11px; font-weight: 700; text-align: center; line-height: 18px; }
+    .znak.start { background: #2f5fd0; }
+    .znak.cel { background: #b42318; }
+
+    .tabela { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .tabela th, .tabela td { padding: 8px 6px; text-align: left; border-bottom: 1px solid var(--ramka); }
+    .tabela th { color: var(--szary); font-weight: 600; }
+
+    .wsp { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+    .wsp > div { display: flex; flex-direction: column; }
+
+    .opinia { margin-bottom: 12px; padding: 12px; border: 1px solid var(--ramka); border-radius: 8px; }
+    .opinia p { margin: 8px 0 0; overflow-wrap: anywhere; }
+    .opinia .naglowek { display: flex; flex-wrap: wrap; gap: 8px; justify-content: space-between; }
+    .gwiazdki { color: #d97706; letter-spacing: 1px; }
+    .nowa-opinia { margin-top: 8px; }
   </style>
 </head>
 <body>
