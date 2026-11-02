@@ -125,7 +125,22 @@ wyloguj mv authtoken = case authtoken of
                                             Nothing -> throwError  err401 
                                 Nothing -> throwError err401 
             
+komentarzedlakierowcy ::  Connection -> KomentarzReq -> (Handler [Komentarz])
+komentarzedlakierowcy conn req = do
+                       let idk = reqidkier req
+                       queryresp <- (liftIO (query conn "SELECT idKier,data,ocena,wystawiajacy,tresc FROM komentarze WHERE idKier = ?" (Only idk) :: IO [(String,String,Double,String, String)]))
+                       let komentarze = map (\(x, y, z,a, b) -> zparsujkomentarze (x, y, z, a,b)) queryresp
+                       return komentarze
+dodajKomentarz :: Connection -> Komentarz -> (Handler String)
+dodajKomentarz conn kom = do
 
+                    let zapytanie = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
+                    operacja <- liftIO (try (execute conn zapytanie (idKier kom,czasotrzymania kom,ocena kom,wystawiajacy kom, tresc kom )))
+                    case operacja  of
+                        Left (e :: SqlError ) -> throwError err500 
+                        (Right _) ->  return "OK"
+
+                    return "OK"
 generujToken :: IO String
 generujToken = do
   bytesarr <- getRandomBytes 32 :: IO BS.ByteString
@@ -149,6 +164,8 @@ zweryfikujZamowienie las los lak lok z
   | lak < 0 = Left "Niepoprawny adres docelowy"
   | (z > 4) || (z < 1) = Left "Ilosc pasazerow poza zasiegiem"
   | otherwise = Right (Zamowienie las los lak lok z)
+zparsujkomentarze:: (String,String,Double,String,String) -> Komentarz
+zparsujkomentarze (a, b, c, d,e) = Komentarz {idKier = a,czasotrzymania=b,ocena=c,wystawiajacy=d,tresc=e}
 
                                     
     

@@ -38,7 +38,18 @@ data Kierowca = Kierowca
     , wolne_miejsca :: Int
     }
     deriving (Show, Generic)
-
+data Komentarz = Komentarz
+    { idKier :: String
+    , wystawiajacy :: String
+    , czasotrzymania :: String
+    , ocena :: Double
+    , tresc :: String
+    }
+    deriving (Show, Generic)
+data KomentarzReq = KomentarzReq
+    { reqidkier :: String
+    }
+    deriving (Show, Generic)
 instance FromJSON Poswiadczenia
 instance ToJSON Odpowiedz
 instance ToSchema Poswiadczenia
@@ -51,3 +62,8 @@ instance ToSchema Zamowienie
 instance ToSchema ZamowienieOdpowiedz
 instance ToJSON Kierowca
 instance ToSchema Kierowca
+instance ToJSON Komentarz
+instance FromJSON Komentarz
+instance ToSchema Komentarz
+instance FromJSON KomentarzReq
+instance ToSchema KomentarzReq
