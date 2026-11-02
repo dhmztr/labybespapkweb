@@ -4,7 +4,7 @@
 
 import Types
 import Apis
-import Control.Concurrent (threadDelay,modifyMVar_,forkIO )
+import Control.Concurrent (threadDelay,modifyMVar_,forkIO, modifyMVar )
 import Control.Concurrent.MVar
 import Control.Exception (try)
 import Control.Monad.IO.Class (MonadIO (liftIO))
@@ -27,6 +27,11 @@ import Servant.Swagger.UI (SwaggerSchemaUI, swaggerSchemaUIServer)
 import Types (WylogujReq)
 import System.Random (randomRIO)
 import Cars (petlaKierowcy)
+import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime)
+import Data.Bool (Bool)
+import Data.Time (getCurrentTime)
+import Network.Wai (Middleware,remoteHost ,pathInfo ,responseLBS )
+import Network.HTTP.Types (status429)
 
 
 type FullAPI = API :<|> SwaggerSchemaUI "swagger-ui" "swagger.json" :<|> Raw
@@ -56,8 +61,9 @@ main = do
   kierowcy <- wygeneruj_kierowcow kierowcy_wiersze 
   let map_kierowcow = M.fromList [(idKierowcy k,k) | k <- kierowcy ]
   mvkierowcy <- newMVar map_kierowcow 
+  mvlimiter <- newMVar M.empty 
   mapM_ (\k -> forkIO (petlaKierowcy mvkierowcy (idKierowcy k))) map_kierowcow 
-  run 8080 (serve (Proxy :: Proxy FullAPI) (serwer sesje przejazdy mvkierowcy conn))
+  run 8080 (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer sesje przejazdy mvkierowcy conn)))
 
 
 wygeneruj_kierowcow :: [Only Int] -> IO [Kierowca]
@@ -71,3 +77,31 @@ wygeneruj_kierowcow (ident:reszta) = do
                         return (kierowca:reszta_kierowcow )
 
 
+
+sprawdzCooldown :: MVar (M.Map String UTCTime) -> String -> NominalDiffTime -> IO Bool
+sprawdzCooldown mv klucz cooldown = do
+    teraz <- getCurrentTime 
+    mapa <- readMVar mv
+    modifyMVar_ mv (\mapa -> pure (M.insert klucz teraz mapa ))
+    case M.lookup klucz mapa of
+        Nothing -> do
+                  modifyMVar_ mv (\mapa -> pure (M.insert klucz teraz mapa ))
+                  return True
+        (Just czas) -> do 
+                  modifyMVar_ mv (\mapa -> pure (M.insert klucz teraz mapa ))
+                  if (diffUTCTime teraz czas) > cooldown 
+                    then return True
+                  else return False
+limiterIP :: MVar (M.Map String UTCTime) -> Middleware
+limiterIP mv app req respond =
+ if pathInfo req `elem` [["login"], ["rejestracja"], ["wystawkomentarz"], ["zamowienie"]]
+  then do 
+        let ip = show (remoteHost req)
+        dozwolone <- sprawdzCooldown mv ip 30
+        if dozwolone
+          then app req respond
+          else respond (responseLBS status429 [] "Za duzo zapytan")
+      else app req respond
+                        
+                      
+          
