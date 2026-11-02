@@ -29,6 +29,8 @@ import GHC.Base (Float)
 import Types (Kierowca (lat, lon))
 import Data.Function (on)
 import Cars (znajdzKierowce)
+import Data.Time.Clock (getCurrentTime)
+import Text.HTML.SanitizeXSS (sanitize)
 
 
 passwordHash :: PasswordHash Argon2
@@ -125,22 +127,49 @@ wyloguj mv authtoken = case authtoken of
                                             Nothing -> throwError  err401 
                                 Nothing -> throwError err401 
             
-komentarzedlakierowcy ::  Connection -> KomentarzReq -> (Handler [Komentarz])
-komentarzedlakierowcy conn req = do
-                       let idk = reqidkier req
-                       queryresp <- (liftIO (query conn "SELECT idKier,data,ocena,wystawiajacy,tresc FROM komentarze WHERE idKier = ?" (Only idk) :: IO [(String,String,Double,String, String)]))
-                       let komentarze = map (\(x, y, z,a, b) -> zparsujkomentarze (x, y, z, a,b)) queryresp
-                       return komentarze
-dodajKomentarz :: Connection -> Komentarz -> (Handler String)
-dodajKomentarz conn kom = do
+komentarzedlakierowcy ::  MVar (M.Map String String) -> Connection -> Maybe String -> KomentarzReq -> (Handler [Komentarz])
+komentarzedlakierowcy mv conn authtoken req = do
+                        case authtoken of 
+                            Nothing -> throwError err401 
+                            Just (tok) -> do 
+                                let strippedToken = stripPrefix "Bearer " tok 
+                                case strippedToken  of
+                                 Nothing -> throwError err401 
+                                 (Just validToken ) -> do 
+                                            innermap <- liftIO (readMVar mv)
+                                            case M.lookup validToken innermap of 
+                                                Nothing -> throwError err401 
+                                                (Just _) -> do
+                                                        
+                                                    let idk = reqidkier req
+                                                    queryresp <- (liftIO (query conn "SELECT idKier,data,ocena,wystawiajacy,tresc FROM komentarze WHERE idKier = ?" (Only idk) :: IO [(String,String,Double,String, String)]))
+                                                    let komentarze = map (\(x, y, z,a, b) -> zparsujkomentarze (x, y, z, a,b)) queryresp
+                                                    return komentarze
+                    
+dodajKomentarz :: MVar (M.Map String String) -> Connection -> Maybe String -> Komentarz -> (Handler String)
+dodajKomentarz mv conn authtoken kom = do
+                    case authtoken of
+                        Nothing -> throwError err401
+                        Just (tok) -> do
+                                    let strippedToken = stripPrefix "Bearer " tok 
+                                    case strippedToken of
+                                        (Just validToken) -> do
+                                            innermap <- liftIO (readMVar mv )
+                                            case M.lookup validToken innermap of
+                                                Nothing -> throwError err401 
+                                                (Just wystawiajacyemail) ->  do
+                                                    let zapytanie = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
+                                                    aktualna_data <- liftIO (getCurrentTime )
+                                                    let zweryfikowany = zweryfikujKomentarz (idKier kom) (show aktualna_data ) (ocena kom) wystawiajacyemail (tresc kom )
+                                                    case zweryfikowany  of
+                                                        (Left powod) -> throwError err406 {errBody = BL8.pack (powod )}
+                                                        (Right poprawnykom) -> do
 
-                    let zapytanie = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
-                    operacja <- liftIO (try (execute conn zapytanie (idKier kom,czasotrzymania kom,ocena kom,wystawiajacy kom, tresc kom )))
-                    case operacja  of
-                        Left (e :: SqlError ) -> throwError err500 
-                        (Right _) ->  return "OK"
-
-                    return "OK"
+                                                            operacja <- liftIO (try (execute conn zapytanie ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),wystawiajacyemail , tresc poprawnykom)))
+                                                            case operacja  of
+                                                             Left (e :: SqlError ) -> throwError err500 
+                                                             (Right _) ->  return "OK"
+                                        Nothing -> throwError err401 
 generujToken :: IO String
 generujToken = do
   bytesarr <- getRandomBytes 32 :: IO BS.ByteString
@@ -167,7 +196,18 @@ zweryfikujZamowienie las los lak lok z
 zparsujkomentarze:: (String,String,Double,String,String) -> Komentarz
 zparsujkomentarze (a, b, c, d,e) = Komentarz {idKier = a,czasotrzymania=b,ocena=c,wystawiajacy=d,tresc=e}
 
+zweryfikujKomentarz :: String -> String -> Double -> String -> String -> Either String Komentarz
+zweryfikujKomentarz idk datakom ocenakier wystawiajacykom tresckom 
+    | null idk || length idk > 30 = Left "Niepoprawny kierowca"
+    | null datakom || length datakom > 50 = Left "Niepoprawna data"
+    | ocenakier > 5 || ocenakier < 0 = Left "Niepoprawna ocena"
+    | null wystawiajacykom || length wystawiajacykom > 30 = Left "Niepoprawny wystawiajacy"
+    | null tresckom || length tresckom > 500 = Left "Niepoprawna tresc komentarza"
+    | otherwise = Right (Komentarz {idKier = sanitizeString idk,czasotrzymania=datakom ,ocena = ocenakier ,wystawiajacy= sanitizeString (wystawiajacykom ),tresc = sanitizeString (tresckom)})
+
                                     
     
                                 
-            
+sanitizeString :: String -> String
+sanitizeString wartosc = T.unpack (sanitize (T.pack wartosc ))
+    

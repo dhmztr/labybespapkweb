@@ -20,6 +20,7 @@ pkgs.mkShell {
         swagger2
         random
         pkgs.elmPackages.elm
+        xss-sanitize
       ]
     ))
   ];
