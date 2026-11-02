@@ -42,10 +42,10 @@ type API =
     :<|> "rejestracja" :> ReqBody '[JSON] Poswiadczenia :> Post '[JSON] Odpowiedz
     :<|> "wyloguj" :> Header "Authorization" String :> Post '[JSON] String
     :<|> "kierowcy" :> Get '[JSON] [Kierowca]
-    :<|> "komentarze" :> ReqBody '[JSON] KomentarzReq :> Post '[JSON] [Komentarz]
-    :<|> "wystawkomentarz" :> ReqBody '[JSON] Komentarz :> Post '[JSON] String
+    :<|> "komentarze" :>  Header "Authorization" String :> ReqBody '[JSON] KomentarzReq :> Post '[JSON] [Komentarz]
+    :<|> "wystawkomentarz" :> Header "Authorization"  String :> ReqBody '[JSON] Komentarz :> Post '[JSON] String
 serwer :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Connection -> Server FullAPI
-serwer mvtokeny mvprzejazdy mvkierowcy conn = (zdrowie :<|> login mvtokeny conn :<|> ja mvtokeny :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy :<|> rejestracja mvtokeny conn :<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy conn :<|> dodajKomentarz conn) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
+serwer mvtokeny mvprzejazdy mvkierowcy conn = (zdrowie :<|> login mvtokeny conn :<|> ja mvtokeny :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy :<|> rejestracja mvtokeny conn :<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy mvtokeny conn :<|> dodajKomentarz mvtokeny conn) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do
