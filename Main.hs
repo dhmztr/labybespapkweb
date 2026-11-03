@@ -7,6 +7,7 @@ import Apis
 import Control.Concurrent (threadDelay,modifyMVar_,forkIO, modifyMVar )
 import Control.Concurrent.MVar
 import Control.Exception (try)
+import Data.Pool (Pool, newPool, defaultPoolConfig,withResource )
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Crypto.Random (MonadRandom (getRandomBytes))
 import Data.Aeson
@@ -33,6 +34,7 @@ import Data.Time (getCurrentTime)
 import Network.Wai (Middleware,remoteHost ,pathInfo ,responseLBS )
 import Network.HTTP.Types (status429)
 
+import Database.Redis qualified as R
 
 type FullAPI = API :<|> SwaggerSchemaUI "swagger-ui" "swagger.json" :<|> Raw
 
@@ -49,21 +51,22 @@ type API =
     :<|> "kierowcy" :> Get '[JSON] [Kierowca]
     :<|> "komentarze" :>  Header "Authorization" String :> ReqBody '[JSON] KomentarzReq :> Post '[JSON] [Komentarz]
     :<|> "wystawkomentarz" :> Header "Authorization"  String :> ReqBody '[JSON] Komentarz :> Post '[JSON] String
-serwer :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Connection -> Server FullAPI
+serwer :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Pool Connection -> Server FullAPI
 serwer mvtokeny mvprzejazdy mvkierowcy conn = (zdrowie :<|> login mvtokeny conn :<|> ja mvtokeny mvprzejazdy mvkierowcy  :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy conn :<|> rejestracja mvtokeny conn :<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy mvtokeny conn :<|> dodajKomentarz mvtokeny conn) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do
   sesje <- newMVar M.empty
-  conn <- liftIO (connectPostgreSQL "")
+  pool <- newPool (defaultPoolConfig (liftIO (connectPostgreSQL "")) close 60 10)
   przejazdy <- newMVar M.empty
-  kierowcy_wiersze <- liftIO (query_ conn "SELECT id FROM vehicles" :: IO [Only Int])
+  kierowcy_wiersze <- liftIO ( withResource  pool $ \conn -> query_ conn "SELECT id FROM vehicles" :: IO [Only Int])
   kierowcy <- wygeneruj_kierowcow kierowcy_wiersze 
   let map_kierowcow = M.fromList [(idKierowcy k,k) | k <- kierowcy ]
   mvkierowcy <- newMVar map_kierowcow 
+  redisConn <- R.connect  R.defaultConnectInfo {R.connectHost = "redis", R.connectPort = R.PortNumber 6379}
   mvlimiter <- newMVar M.empty 
   mapM_ (\k -> forkIO (petlaKierowcy mvkierowcy (idKierowcy k))) map_kierowcow 
-  run 8080 (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer sesje przejazdy mvkierowcy conn)))
+  run 8080 (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer sesje przejazdy mvkierowcy pool)))
 
 
 wygeneruj_kierowcow :: [Only Int] -> IO [Kierowca]
@@ -84,7 +87,7 @@ sprawdzCooldown mv klucz prog czasokna = do
     mapa <- readMVar mv
     case M.lookup klucz mapa of
         Nothing -> do
-                  modifyMVar_ mv (\mapa -> pure (M.insert klucz (teraz ,0) mapa ))
+                  modifyMVar_ mv (\mapa -> pure (M.insert klucz (teraz ,1) mapa ))
                   return True
         (Just (czas,ilosc)) -> do 
                   if (diffUTCTime teraz czas) > czasokna

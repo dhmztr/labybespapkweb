@@ -31,6 +31,7 @@ import Data.Function (on)
 import Cars (znajdzKierowce)
 import Data.Time.Clock (getCurrentTime)
 import Text.HTML.SanitizeXSS (sanitize)
+import Data.Pool (Pool, withResource)
 
 
 passwordHash :: PasswordHash Argon2
@@ -40,8 +41,8 @@ kierowcy mv = do
                 inner <- liftIO (readMVar mv)
 
                 return (M.elems inner)
-zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Connection -> Maybe String -> Zamowienie -> (Handler Kierowca)
-zamowienie mvtokeny mvprzejazdy mvkierowcy conn naglowek zamowieniereq = case naglowek of
+zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Pool Connection -> Maybe String -> Zamowienie -> (Handler Kierowca)
+zamowienie mvtokeny mvprzejazdy mvkierowcy pool naglowek zamowieniereq = case naglowek of
     (Just rawtok) -> do
         case (stripPrefix "Bearer " rawtok) of
             Just x -> do
@@ -76,14 +77,17 @@ zamowienie mvtokeny mvprzejazdy mvkierowcy conn naglowek zamowieniereq = case na
                                                     (Just ((lat_koncowy zamowienieOk ), (lon_koncowy zamowienieOk ))) (wolne_miejsca kierowca)
 
                                             let iduserquery = "SELECT id FROM users WHERE email = ?"
-                                            iduseraraw <- liftIO (query conn iduserquery (Only usermail) :: IO [Only Int])
+                                            iduseraraw <- 
+                                                    liftIO (withResource pool $ \conn -> do 
+                                                    query conn iduserquery (Only usermail) :: IO [Only Int])
                                             if length iduseraraw == 0 then throwError err403 {errBody = BL8.pack ("User doesnt exist in database")}
                                             else do 
                                                 let idusera = head (map fromOnly iduseraraw)
                                                 let insertquery = "INSERT INTO rides (client_id,vehicle_id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng) VALUES (?,?,?,?,?,?)"
-                                                zwroconazbazy <- liftIO (try (execute conn insertquery 
-                                                    (idusera, (read (idKierowcy kierowca) :: Int), lat_startowy zamowienieOk, lon_startowy
-                                                    zamowienieOk, lat_koncowy zamowienieOk, lon_koncowy zamowienieOk)))
+                                                zwroconazbazy <- 
+                                                    liftIO ( withResource pool $ \conn -> try (execute conn insertquery 
+                                                                                            (idusera, (read (idKierowcy kierowca) :: Int), lat_startowy zamowienieOk, lon_startowy
+                                                                                            zamowienieOk, lat_koncowy zamowienieOk, lon_koncowy zamowienieOk)))
                                                 case zwroconazbazy of
                                                     Left ( e::SqlError ) -> throwError err500 
                                                     Right (_) -> do
@@ -97,11 +101,11 @@ zamowienie mvtokeny mvprzejazdy mvkierowcy conn naglowek zamowieniereq = case na
                     Nothing -> throwError (err401{errBody = BL8.pack ("Wygasly token ")})
             Nothing -> throwError err401
     Nothing -> throwError (err401{errBody = (BL8.pack "Brak tokenu autoryzujacego")})
-rejestracja :: MVar (M.Map String String) -> Connection -> Poswiadczenia -> (Handler Odpowiedz)
-rejestracja mv conn user = do
+rejestracja :: MVar (M.Map String String) -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
+rejestracja mv pool user = do
     let zapytanie = "INSERT INTO users (email,password_hash) Values (?,?)"
     hash_haslo <- hashPassword $ (mkPassword (T.pack (haslo user)))
-    operacja <- liftIO (try (execute conn zapytanie (email user, unPasswordHash (hash_haslo))))
+    operacja <- liftIO ( withResource  pool $ \conn -> try (execute conn zapytanie (email user, unPasswordHash (hash_haslo))))
     case operacja of
         Left (e :: SqlError)
             | sqlState e == "23505" -> throwError err409{errBody = (BL8.pack ("Uzytkownik istnieje"))}
@@ -110,9 +114,9 @@ rejestracja mv conn user = do
             tok <- liftIO (generujToken)
             liftIO (modifyMVar_ mv (\mapa -> pure (M.insert tok (email user) mapa)))
             pure (Odpowiedz tok)
-login :: MVar (M.Map String String) -> Connection -> Poswiadczenia -> (Handler Odpowiedz)
-login mv conn user = do
-    rows <- (liftIO (query conn "SELECT password_hash FROM users WHERE email = ?" (Only (email user)) :: IO [Only T.Text]))
+login :: MVar (M.Map String String) -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
+login mv pool user = do
+    rows <- liftIO (withResource pool $ \conn -> do (query conn "SELECT password_hash FROM users WHERE email = ?" (Only (email user)) :: IO [Only T.Text]))
     let (hash, istnieje) = case rows of
             (Only h : _) -> ((PasswordHash h), True)
             [] -> (passwordHash, False)
@@ -167,8 +171,8 @@ wyloguj mv authtoken = case authtoken of
                                             Nothing -> throwError  err401 
                                 Nothing -> throwError err401 
             
-komentarzedlakierowcy ::  MVar (M.Map String String) -> Connection -> Maybe String -> KomentarzReq -> (Handler [Komentarz])
-komentarzedlakierowcy mv conn authtoken req = do
+komentarzedlakierowcy ::  MVar (M.Map String String) -> Pool Connection -> Maybe String -> KomentarzReq -> (Handler [Komentarz])
+komentarzedlakierowcy mv pool authtoken req = do
                         case authtoken of 
                             Nothing -> throwError err401 
                             Just (tok) -> do 
@@ -182,12 +186,12 @@ komentarzedlakierowcy mv conn authtoken req = do
                                                 (Just _) -> do
                                                         
                                                     let idk = reqidkier req
-                                                    queryresp <- (liftIO (query conn "SELECT idKier,data,ocena,wystawiajacy,tresc FROM komentarze WHERE idKier = ?" (Only idk) :: IO [(String,String,Double,String, String)]))
+                                                    queryresp <- (liftIO ( withResource pool $ \conn -> query conn "SELECT idKier,data,ocena,wystawiajacy,tresc FROM komentarze WHERE idKier = ?" (Only idk) :: IO [(String,String,Double,String, String)]))
                                                     let komentarze = map (\(x, y, z,a, b) -> zparsujkomentarze (x, y, z, a,b)) queryresp
                                                     return komentarze
                     
-dodajKomentarz :: MVar (M.Map String String) -> Connection -> Maybe String -> Komentarz -> (Handler String)
-dodajKomentarz mv conn authtoken kom = do
+dodajKomentarz :: MVar (M.Map String String) -> Pool Connection -> Maybe String -> Komentarz -> (Handler String)
+dodajKomentarz mv pool authtoken kom = do
                     case authtoken of
                         Nothing -> throwError err401
                         Just (tok) -> do
@@ -205,7 +209,7 @@ dodajKomentarz mv conn authtoken kom = do
                                                         (Left powod) -> throwError err406 {errBody = BL8.pack (powod )}
                                                         (Right poprawnykom) -> do
 
-                                                            operacja <- liftIO (try (execute conn zapytanie ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),wystawiajacyemail , tresc poprawnykom)))
+                                                            operacja <- liftIO (withResource pool $ \conn -> try (execute conn zapytanie ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),wystawiajacyemail , tresc poprawnykom)))
                                                             case operacja  of
                                                              Left (e :: SqlError ) -> throwError err500 
                                                              (Right _) ->  return "OK"
