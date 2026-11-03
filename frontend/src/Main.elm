@@ -1428,6 +1428,7 @@ hero flota =
                     [ a [ class "pasek__link", href "#flota" ] [ text "Flota" ]
                     , a [ class "pasek__link", href "#jak" ] [ text "Jak to działa" ]
                     , a [ class "pasek__link", href "#pytania" ] [ text "Pytania" ]
+                    , a [ class "pasek__link", href repozytorium ] [ text "GitHub" ]
                     , a [ class "przycisk przycisk--maly", href "#konto" ] [ text "Zaloguj się" ]
                     ]
                 ]
@@ -1759,6 +1760,13 @@ przyciskSegmentu aktywny msg napis =
         [ text napis ]
 
 
+{-| kod projektu, linkowany w pasku i w stopce strony głównej
+-}
+repozytorium : String
+repozytorium =
+    "https://github.com/dhmztr/labybespapkweb"
+
+
 stopka : Html Msg
 stopka =
     footer [ class "stopka" ]
@@ -1772,6 +1780,7 @@ stopka =
                 , li [] [ a [ href "#jak" ] [ text "Jak to działa" ] ]
                 , li [] [ a [ href "#pytania" ] [ text "Pytania" ] ]
                 , li [] [ a [ href "/swagger-ui" ] [ text "Dokumentacja API" ] ]
+                , li [] [ a [ href repozytorium ] [ text "Kod na GitHubie" ] ]
                 ]
             ]
         , div [ class "stopka__dol" ]
