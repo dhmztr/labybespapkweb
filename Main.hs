@@ -52,12 +52,11 @@ type API =
     :<|> "komentarze" :>  Header "Authorization" String :> ReqBody '[JSON] KomentarzReq :> Post '[JSON] [Komentarz]
     :<|> "wystawkomentarz" :> Header "Authorization"  String :> ReqBody '[JSON] Komentarz :> Post '[JSON] String
     :<|> "mojeprzejazdy" :> Header "Authorization" String :> Get '[JSON] [Przejazd]
-serwer :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Pool Connection -> Server FullAPI
-serwer mvtokeny mvprzejazdy mvkierowcy pool = (zdrowie :<|> login mvtokeny pool:<|> ja mvtokeny mvprzejazdy mvkierowcy  :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy pool:<|> rejestracja mvtokeny pool:<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy mvtokeny pool:<|> dodajKomentarz mvtokeny pool:<|> mojeZamowienia mvtokeny pool) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
+serwer :: R.Connection -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Pool Connection -> Server FullAPI
+serwer rconn mvprzejazdy mvkierowcy pool = (zdrowie :<|> login rconn pool:<|> ja rconn mvprzejazdy mvkierowcy  :<|> zamowienie rconn mvprzejazdy mvkierowcy pool:<|> rejestracja rconn pool:<|> wyloguj rconn:<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy rconn pool:<|> dodajKomentarz rconn pool:<|> mojeZamowienia rconn pool) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do
-  sesje <- newMVar M.empty
   pool <- newPool (defaultPoolConfig (liftIO (connectPostgreSQL "")) close 60 10)
   przejazdy <- newMVar M.empty
   kierowcy_wiersze <- liftIO ( withResource  pool $ \conn -> query_ conn "SELECT id FROM vehicles" :: IO [Only Int])
@@ -67,7 +66,7 @@ main = do
   redisConn <- R.connect  R.defaultConnectInfo {R.connectHost = "redis", R.connectPort = R.PortNumber 6379}
   mvlimiter <- newMVar M.empty 
   mapM_ (\k -> forkIO (petlaKierowcy mvkierowcy (idKierowcy k))) map_kierowcow 
-  run 8080 (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer sesje przejazdy mvkierowcy pool)))
+  run 8080 (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer redisConn przejazdy mvkierowcy pool)))
 
 
 wygeneruj_kierowcow :: [Only Int] -> IO [Kierowca]
@@ -96,7 +95,7 @@ sprawdzCooldown mv klucz prog czasokna = do
                       modifyMVar_ mv (\mapa -> pure (M.insert klucz (teraz ,1) mapa ))
                       return True
                   else 
-                    if ilosc > prog
+                    if ilosc >= prog
                       then return False
                     else do
                       modifyMVar_ mv (\mapa -> pure (M.insert klucz (teraz ,ilosc + 1) mapa ))
@@ -114,5 +113,4 @@ limiterIP mv app req respond =
           else respond (responseLBS status429 [] "Za duzo zapytan")
       else app req respond
                         
-                      
-          
+                     

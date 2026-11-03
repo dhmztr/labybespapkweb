@@ -33,6 +33,13 @@ import Data.Time.Clock (getCurrentTime)
 import Text.HTML.SanitizeXSS (sanitize)
 import Data.Pool (Pool, withResource)
 import Control.Monad.Error.Class (MonadError(throwError))
+import Database.Redis qualified as R
+import Data.ByteString.Char8 qualified as BC8
+import Text.Regex.TDFA ((=~))
+
+
+poprawnyEmail :: String -> Bool
+poprawnyEmail email = email =~ ("^[^ ]+@[^ ]+\\.[^ ]+$" :: String)
 
 
 passwordHash :: PasswordHash Argon2
@@ -42,13 +49,13 @@ kierowcy mv = do
                 inner <- liftIO (readMVar mv)
 
                 return (M.elems inner)
-zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Pool Connection -> Maybe String -> Zamowienie -> (Handler Kierowca)
-zamowienie mvtokeny mvprzejazdy mvkierowcy pool naglowek zamowieniereq = case naglowek of
+zamowienie :: R.Connection -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Pool Connection -> Maybe String -> Zamowienie -> (Handler Kierowca)
+zamowienie rconn mvprzejazdy mvkierowcy pool naglowek zamowieniereq = case naglowek of
     (Just rawtok) -> do
         case (stripPrefix "Bearer " rawtok) of
-            Just x -> do
-                mapa <- liftIO (readMVar mvtokeny)
-                case (M.lookup x mapa) of
+            Just validtoken -> do
+                emailquery <- liftIO (pobierzEmail rconn validtoken )
+                case emailquery of
                     (Just usermail) -> do
                         przejazdy <- liftIO (readMVar mvprzejazdy )
                         let mtokenAktywny = M.lookup usermail przejazdy 
@@ -102,9 +109,17 @@ zamowienie mvtokeny mvprzejazdy mvkierowcy pool naglowek zamowieniereq = case na
                     Nothing -> throwError (err401{errBody = BL8.pack ("Wygasly token ")})
             Nothing -> throwError err401
     Nothing -> throwError (err401{errBody = (BL8.pack "Brak tokenu autoryzujacego")})
-rejestracja :: MVar (M.Map String String) -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
-rejestracja mv pool user = do
+rejestracja :: R.Connection -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
+rejestracja rconn pool user = do
     let zapytanie = "INSERT INTO users (email,password_hash) Values (?,?)"
+    if length (haslo user) <= 8
+        then throwError err400 {errBody = (BL8.pack ("Zbyt krótkie hasło"))}
+    else
+        return ()
+    if not (poprawnyEmail (email user))
+        then throwError err400 {errBody = (BL8.pack ("Niepoprawny email"))}
+    else
+        return ()
     hash_haslo <- hashPassword $ (mkPassword (T.pack (haslo user)))
     operacja <- liftIO ( withResource  pool $ \conn -> try (execute conn zapytanie (email user, unPasswordHash (hash_haslo))))
     case operacja of
@@ -113,10 +128,13 @@ rejestracja mv pool user = do
             | otherwise -> throwError err500{errBody = (BL8.pack ("Nie udalo sie stworzyc konta"))}
         (Right _) -> do
             tok <- liftIO (generujToken)
-            liftIO (modifyMVar_ mv (\mapa -> pure (M.insert tok (email user) mapa)))
-            pure (Odpowiedz tok)
-login :: MVar (M.Map String String) -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
-login mv pool user = do
+            wynik <- liftIO (zapiszToken rconn tok (email user))
+            if wynik then 
+                pure (Odpowiedz tok)
+            else
+                throwError err500
+login :: R.Connection -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
+login rconn pool user = do
     rows <- liftIO (withResource pool $ \conn -> do (query conn "SELECT password_hash FROM users WHERE email = ?" (Only (email user)) :: IO [Only T.Text]))
     let (hash, istnieje) = case rows of
             (Only h : _) -> ((PasswordHash h), True)
@@ -124,20 +142,25 @@ login mv pool user = do
     if ((checkPassword (mkPassword (T.pack (haslo user))) hash) == PasswordCheckSuccess) && istnieje
         then do
             token <- liftIO generujToken
-            liftIO (modifyMVar_ mv (\mapa -> pure (M.insert token (email user) mapa)))
-            return (Odpowiedz token)
+            wynik <- liftIO (zapiszToken rconn token (email user))
+            if wynik 
+                then
+
+                return (Odpowiedz token)
+            else
+                throwError err500
         else
             throwError err401
 
 zdrowie :: (Handler String)
 zdrowie = return "ok"
-ja :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Maybe String -> Handler JaOdpowiedz 
-ja mvtokeny mvprzejazdy mvkierowcy header = case header of
+ja :: R.Connection -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Maybe String -> Handler JaOdpowiedz 
+ja rconn mvprzejazdy mvkierowcy header = case header of
     Just x -> do
         case (stripPrefix "Bearer " x ) of
-            Just tok -> do 
-                mapatokeny <- liftIO (readMVar mvtokeny )
-                case M.lookup tok mapatokeny of
+            Just validtoken -> do 
+                emailquery <- liftIO (pobierzEmail rconn validtoken )
+                case emailquery of
                  Nothing -> throwError err401 
                  Just (mail) -> do
                                 mapaprzejazdy <- liftIO (readMVar mvprzejazdy )
@@ -161,19 +184,19 @@ ja mvtokeny mvprzejazdy mvkierowcy header = case header of
 
             Nothing -> throwError err401 
     Nothing -> throwError err401
-wyloguj :: MVar (M.Map String String) -> Maybe String -> (Handler String) 
-wyloguj mv authtoken = case authtoken of 
+wyloguj :: R.Connection -> Maybe String -> (Handler String) 
+wyloguj rconn authtoken = case authtoken of 
                                 Just tok -> do
                                         let strippedToken = stripPrefix "Bearer " tok 
                                         case strippedToken  of 
                                             Just validtoken -> do
-                                                liftIO (modifyMVar_ mv (\mapa -> pure (M.delete validtoken mapa)))
+                                                liftIO (usunToken rconn validtoken)
                                                 pure "OK"
                                             Nothing -> throwError  err401 
                                 Nothing -> throwError err401 
             
-komentarzedlakierowcy ::  MVar (M.Map String String) -> Pool Connection -> Maybe String -> KomentarzReq -> (Handler [Komentarz])
-komentarzedlakierowcy mv pool authtoken req = do
+komentarzedlakierowcy ::  R.Connection  -> Pool Connection -> Maybe String -> KomentarzReq -> (Handler [Komentarz])
+komentarzedlakierowcy rconn pool authtoken req = do
                         case authtoken of 
                             Nothing -> throwError err401 
                             Just (tok) -> do 
@@ -181,8 +204,8 @@ komentarzedlakierowcy mv pool authtoken req = do
                                 case strippedToken  of
                                  Nothing -> throwError err401 
                                  (Just validToken ) -> do 
-                                            innermap <- liftIO (readMVar mv)
-                                            case M.lookup validToken innermap of 
+                                            emailquery <- liftIO (pobierzEmail rconn validToken )
+                                            case emailquery of
                                                 Nothing -> throwError err401 
                                                 (Just _) -> do
                                                         
@@ -191,16 +214,16 @@ komentarzedlakierowcy mv pool authtoken req = do
                                                     let komentarze = map (\(x, y, z,a, b) -> zparsujkomentarze (x, y, z, a,b)) queryresp
                                                     return komentarze
                     
-dodajKomentarz :: MVar (M.Map String String) -> Pool Connection -> Maybe String -> Komentarz -> (Handler String)
-dodajKomentarz mv pool authtoken kom = do
+dodajKomentarz :: R.Connection -> Pool Connection -> Maybe String -> Komentarz -> (Handler String)
+dodajKomentarz rconn pool authtoken kom = do
                     case authtoken of
                         Nothing -> throwError err401
                         Just (tok) -> do
                                     let strippedToken = stripPrefix "Bearer " tok 
                                     case strippedToken of
                                         (Just validToken) -> do
-                                            innermap <- liftIO (readMVar mv )
-                                            case M.lookup validToken innermap of
+                                            emailquery <- liftIO (pobierzEmail rconn validToken )
+                                            case emailquery of
                                                 Nothing -> throwError err401 
                                                 (Just wystawiajacyemail) ->  do
                                                     let zapytanie = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
@@ -215,16 +238,16 @@ dodajKomentarz mv pool authtoken kom = do
                                                              Left (e :: SqlError ) -> throwError err500 
                                                              (Right _) ->  return "OK"
                                         Nothing -> throwError err401 
-mojeZamowienia:: MVar (M.Map String String) -> Pool Connection -> Maybe String -> (Handler [Przejazd])
-mojeZamowienia mvtokeny pool authtoken = do 
+mojeZamowienia:: R.Connection -> Pool Connection -> Maybe String -> (Handler [Przejazd])
+mojeZamowienia rconn pool authtoken = do 
                     case authtoken of
                         Nothing -> throwError err401
                         Just (tok) -> do
                                     let strippedToken = stripPrefix "Bearer " tok 
                                     case strippedToken of
                                         (Just validToken) -> do
-                                            innermap <- liftIO (readMVar mvtokeny )
-                                            case M.lookup validToken innermap of
+                                            emailquery <- liftIO (pobierzEmail rconn validToken )
+                                            case emailquery of
                                                 Nothing -> throwError err401 
                                                 (Just usermail) -> do
                                                         let iduserquery = "SELECT id FROM users WHERE email = ?"
@@ -284,3 +307,28 @@ sanitizeString wartosc = T.unpack (sanitize (T.pack wartosc ))
 parseprzejazdy :: [(Int, Double, Double, Double, Double, String, String)] -> [Przejazd]
 parseprzejazdy [] = []
 parseprzejazdy ((a,b,c,d,e,f,g):reszta) = (Przejazd a b c d e f g  ):parseprzejazdy reszta
+
+
+pobierzEmail :: R.Connection -> String -> IO (Maybe String)
+pobierzEmail redisConn token = do
+        wynik <- R.runRedis redisConn (R.get (BC8.pack token)) :: IO (Either R.Reply (Maybe BS.ByteString))
+        case wynik of 
+          Left _ -> return Nothing
+          Right Nothing -> return Nothing
+          Right (Just email) -> return (Just (BC8.unpack email))
+
+zapiszToken :: R.Connection -> String -> String -> IO Bool
+zapiszToken redisConn token mail = do
+        wynik <- R.runRedis redisConn (R.setex (BC8.pack token) 3600 (BC8.pack mail)) :: IO (Either R.Reply R.Status)
+        case wynik of 
+          Left _ -> return False 
+          Right _ -> return True
+usunToken :: R.Connection -> String -> IO Integer
+usunToken redisConn token = do
+                            wynik <- R.runRedis redisConn (R.del [(BC8.pack token)])
+                            case wynik of
+                                Left _ -> return 0
+                                (Right i) -> return i
+
+
+
