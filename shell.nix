@@ -21,6 +21,8 @@ pkgs.mkShell {
         random
         pkgs.elmPackages.elm
         xss-sanitize
+        hedis
+        resource-pool
       ]
     ))
   ];

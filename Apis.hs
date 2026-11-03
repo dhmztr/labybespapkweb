@@ -31,6 +31,8 @@ import Data.Function (on)
 import Cars (znajdzKierowce)
 import Data.Time.Clock (getCurrentTime)
 import Text.HTML.SanitizeXSS (sanitize)
+import Data.Pool (Pool, withResource)
+import Control.Monad.Error.Class (MonadError(throwError))
 
 
 passwordHash :: PasswordHash Argon2
@@ -40,8 +42,8 @@ kierowcy mv = do
                 inner <- liftIO (readMVar mv)
 
                 return (M.elems inner)
-zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Maybe String -> Zamowienie -> (Handler Kierowca)
-zamowienie mvtokeny mvprzejazdy mvkierowcy naglowek zamowieniereq = case naglowek of
+zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Pool Connection -> Maybe String -> Zamowienie -> (Handler Kierowca)
+zamowienie mvtokeny mvprzejazdy mvkierowcy pool naglowek zamowieniereq = case naglowek of
     (Just rawtok) -> do
         case (stripPrefix "Bearer " rawtok) of
             Just x -> do
@@ -71,18 +73,40 @@ zamowienie mvtokeny mvprzejazdy mvkierowcy naglowek zamowieniereq = case naglowe
                                         
                                             let kierowca = (znajdzKierowce ((lat_startowy zamowienieOk ) ,(lon_startowy zamowienieOk)) (miejsca zamowienieOk) kierowcy)
                                             liftIO (modifyMVar_ mvprzejazdy (\mapa -> pure (M.insert usermail (idKierowcy kierowca) mapa)))
-                                            let zmodyfikowany = Kierowca (idKierowcy kierowca ) (lat kierowca) (lon kierowca ) (Just ((lat_koncowy zamowienieOk ),(lon_koncowy zamowienieOk ))) (wolne_miejsca kierowca )
-                                            liftIO (modifyMVar_ mvkierowcy (\mapa -> pure (M.insert (idKierowcy kierowca) zmodyfikowany mapa ) ))
-                                            return zmodyfikowany 
+                                            let zmodyfikowany = Kierowca (idKierowcy kierowca ) (lat kierowca) (lon kierowca ) 
+                                                    (Just ((lat_startowy zamowienieOk ), (lon_startowy zamowienieOk )))
+                                                    (Just ((lat_koncowy zamowienieOk ), (lon_koncowy zamowienieOk ))) (wolne_miejsca kierowca)
+
+                                            let iduserquery = "SELECT id FROM users WHERE email = ?"
+                                            iduseraraw <- 
+                                                    liftIO (withResource pool $ \conn -> do 
+                                                    query conn iduserquery (Only usermail) :: IO [Only Int])
+                                            if length iduseraraw == 0 then throwError err403 {errBody = BL8.pack ("User doesnt exist in database")}
+                                            else do 
+                                                let idusera = head (map fromOnly iduseraraw)
+                                                let insertquery = "INSERT INTO rides (client_id,vehicle_id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng) VALUES (?,?,?,?,?,?)"
+                                                zwroconazbazy <- 
+                                                    liftIO ( withResource pool $ \conn -> try (execute conn insertquery 
+                                                                                            (idusera, (read (idKierowcy kierowca) :: Int), lat_startowy zamowienieOk, lon_startowy
+                                                                                            zamowienieOk, lat_koncowy zamowienieOk, lon_koncowy zamowienieOk)))
+                                                case zwroconazbazy of
+                                                    Left ( e::SqlError ) -> throwError err500 
+                                                    Right (_) -> do
+                                                    
+                                                        liftIO (modifyMVar_ mvkierowcy (\mapa -> pure (M.insert (idKierowcy kierowca) zmodyfikowany mapa ) ))
+                                                        return zmodyfikowany 
+                                                
+
+
                             Left powod -> throwError (err400{errBody = (BL8.pack ("Nie mozna ukonczyc zamowienia: " ++ powod))})
                     Nothing -> throwError (err401{errBody = BL8.pack ("Wygasly token ")})
             Nothing -> throwError err401
     Nothing -> throwError (err401{errBody = (BL8.pack "Brak tokenu autoryzujacego")})
-rejestracja :: MVar (M.Map String String) -> Connection -> Poswiadczenia -> (Handler Odpowiedz)
-rejestracja mv conn user = do
+rejestracja :: MVar (M.Map String String) -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
+rejestracja mv pool user = do
     let zapytanie = "INSERT INTO users (email,password_hash) Values (?,?)"
     hash_haslo <- hashPassword $ (mkPassword (T.pack (haslo user)))
-    operacja <- liftIO (try (execute conn zapytanie (email user, unPasswordHash (hash_haslo))))
+    operacja <- liftIO ( withResource  pool $ \conn -> try (execute conn zapytanie (email user, unPasswordHash (hash_haslo))))
     case operacja of
         Left (e :: SqlError)
             | sqlState e == "23505" -> throwError err409{errBody = (BL8.pack ("Uzytkownik istnieje"))}
@@ -91,9 +115,9 @@ rejestracja mv conn user = do
             tok <- liftIO (generujToken)
             liftIO (modifyMVar_ mv (\mapa -> pure (M.insert tok (email user) mapa)))
             pure (Odpowiedz tok)
-login :: MVar (M.Map String String) -> Connection -> Poswiadczenia -> (Handler Odpowiedz)
-login mv conn user = do
-    rows <- (liftIO (query conn "SELECT password_hash FROM users WHERE email = ?" (Only (email user)) :: IO [Only T.Text]))
+login :: MVar (M.Map String String) -> Pool Connection -> Poswiadczenia -> (Handler Odpowiedz)
+login mv pool user = do
+    rows <- liftIO (withResource pool $ \conn -> do (query conn "SELECT password_hash FROM users WHERE email = ?" (Only (email user)) :: IO [Only T.Text]))
     let (hash, istnieje) = case rows of
             (Only h : _) -> ((PasswordHash h), True)
             [] -> (passwordHash, False)
@@ -107,13 +131,34 @@ login mv conn user = do
 
 zdrowie :: (Handler String)
 zdrowie = return "ok"
-ja :: MVar (M.Map String String) -> Maybe String -> Handler String
-ja mv header = case header of
+ja :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Maybe String -> Handler JaOdpowiedz 
+ja mvtokeny mvprzejazdy mvkierowcy header = case header of
     Just x -> do
         case (stripPrefix "Bearer " x ) of
             Just tok -> do 
-                mapa <- liftIO (readMVar mv)
-                maybe (throwError err401) return (M.lookup tok mapa)
+                mapatokeny <- liftIO (readMVar mvtokeny )
+                case M.lookup tok mapatokeny of
+                 Nothing -> throwError err401 
+                 Just (mail) -> do
+                                mapaprzejazdy <- liftIO (readMVar mvprzejazdy )
+                                case M.lookup mail mapaprzejazdy of
+                                    Nothing -> return (JaOdpowiedz mail Nothing)
+                                    Just (idK) -> do
+                                                mapakierowcow <- liftIO (readMVar mvkierowcy )
+                                                case M.lookup idK mapakierowcow  of
+                                                    Nothing -> do
+                                                        liftIO (modifyMVar_ mvprzejazdy (\mapa -> pure (M.delete mail mapa )))
+                                                        return (JaOdpowiedz mail Nothing)
+                                                    Just (kier) -> do
+                                                            case (cel kier) of
+                                                                Just (_,_) -> return (JaOdpowiedz mail (Just (idK )))
+                                                                Nothing -> do
+                                                                        liftIO (modifyMVar_ mvprzejazdy (\mapa -> pure (M.delete mail mapa )))
+                                                                        return (JaOdpowiedz mail Nothing)
+
+
+
+
             Nothing -> throwError err401 
     Nothing -> throwError err401
 wyloguj :: MVar (M.Map String String) -> Maybe String -> (Handler String) 
@@ -127,8 +172,8 @@ wyloguj mv authtoken = case authtoken of
                                             Nothing -> throwError  err401 
                                 Nothing -> throwError err401 
             
-komentarzedlakierowcy ::  MVar (M.Map String String) -> Connection -> Maybe String -> KomentarzReq -> (Handler [Komentarz])
-komentarzedlakierowcy mv conn authtoken req = do
+komentarzedlakierowcy ::  MVar (M.Map String String) -> Pool Connection -> Maybe String -> KomentarzReq -> (Handler [Komentarz])
+komentarzedlakierowcy mv pool authtoken req = do
                         case authtoken of 
                             Nothing -> throwError err401 
                             Just (tok) -> do 
@@ -142,12 +187,12 @@ komentarzedlakierowcy mv conn authtoken req = do
                                                 (Just _) -> do
                                                         
                                                     let idk = reqidkier req
-                                                    queryresp <- (liftIO (query conn "SELECT idKier,data,ocena,wystawiajacy,tresc FROM komentarze WHERE idKier = ?" (Only idk) :: IO [(String,String,Double,String, String)]))
+                                                    queryresp <- (liftIO ( withResource pool $ \conn -> query conn "SELECT idKier,data,ocena,wystawiajacy,tresc FROM komentarze WHERE idKier = ?" (Only idk) :: IO [(String,String,Double,String, String)]))
                                                     let komentarze = map (\(x, y, z,a, b) -> zparsujkomentarze (x, y, z, a,b)) queryresp
                                                     return komentarze
                     
-dodajKomentarz :: MVar (M.Map String String) -> Connection -> Maybe String -> Komentarz -> (Handler String)
-dodajKomentarz mv conn authtoken kom = do
+dodajKomentarz :: MVar (M.Map String String) -> Pool Connection -> Maybe String -> Komentarz -> (Handler String)
+dodajKomentarz mv pool authtoken kom = do
                     case authtoken of
                         Nothing -> throwError err401
                         Just (tok) -> do
@@ -165,11 +210,36 @@ dodajKomentarz mv conn authtoken kom = do
                                                         (Left powod) -> throwError err406 {errBody = BL8.pack (powod )}
                                                         (Right poprawnykom) -> do
 
-                                                            operacja <- liftIO (try (execute conn zapytanie ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),wystawiajacyemail , tresc poprawnykom)))
+                                                            operacja <- liftIO (withResource pool $ \conn -> try (execute conn zapytanie ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),wystawiajacyemail , tresc poprawnykom)))
                                                             case operacja  of
                                                              Left (e :: SqlError ) -> throwError err500 
                                                              (Right _) ->  return "OK"
                                         Nothing -> throwError err401 
+mojeZamowienia:: MVar (M.Map String String) -> Pool Connection -> Maybe String -> (Handler [Przejazd])
+mojeZamowienia mvtokeny pool authtoken = do 
+                    case authtoken of
+                        Nothing -> throwError err401
+                        Just (tok) -> do
+                                    let strippedToken = stripPrefix "Bearer " tok 
+                                    case strippedToken of
+                                        (Just validToken) -> do
+                                            innermap <- liftIO (readMVar mvtokeny )
+                                            case M.lookup validToken innermap of
+                                                Nothing -> throwError err401 
+                                                (Just usermail) -> do
+                                                        let iduserquery = "SELECT id FROM users WHERE email = ?"
+                                                        iduseraraw <- liftIO (withResource pool $ \conn -> do 
+                                                                query conn iduserquery (Only usermail) :: IO [Only Int])
+                                                        let idusera = head (map fromOnly iduseraraw)
+                                                        let ridesquery = "SELECT vehicle_id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,status,created_at FROM rides WHERE client_id = ?"
+                                                        przejazdyraw <- liftIO (withResource pool $ \conn -> 
+                                                            query conn ridesquery (Only idusera) :: IO [( Int, Double, Double, Double, Double, String, String)]) 
+                                                        let przejazdy = parseprzejazdy przejazdyraw
+                                                        return przejazdy
+                                                        
+
+
+                                
 generujToken :: IO String
 generujToken = do
   bytesarr <- getRandomBytes 32 :: IO BS.ByteString
@@ -210,4 +280,7 @@ zweryfikujKomentarz idk datakom ocenakier wystawiajacykom tresckom
                                 
 sanitizeString :: String -> String
 sanitizeString wartosc = T.unpack (sanitize (T.pack wartosc ))
-    
+
+parseprzejazdy :: [(Int, Double, Double, Double, Double, String, String)] -> [Przejazd]
+parseprzejazdy [] = []
+parseprzejazdy ((a,b,c,d,e,f,g):reszta) = (Przejazd a b c d e f g  ):parseprzejazdy reszta
