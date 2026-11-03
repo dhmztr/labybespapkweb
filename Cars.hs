@@ -25,9 +25,16 @@ import Data.List (stripPrefix, minimumBy)
 import GHC.Base (Float)
 import Types (Kierowca (lat, lon))
 import Data.Function (on)
-import System.Random (randomRIO)
+import System.Random (randomRIO,StdGen,uniformR )
 krok :: Double
 krok = 0.01
+cityQuad :: [Point]
+cityQuad =
+    [ (51.2302, 16.9939) -- A
+    , (51.1211, 17.2162) -- B
+    , (51.0812, 16.9172) -- C
+    , (51.038, 17.1099) -- D
+    ]
 petlaKierowcy :: MVar (M.Map String Kierowca) -> String -> IO ()
 petlaKierowcy mv idK = do
           threadDelay 1000000
@@ -37,8 +44,14 @@ petlaKierowcy mv idK = do
           let kierowca = inside M.! idK 
           case (cel kierowca) of 
                     Nothing -> do 
-                              let nowyKierowca = Kierowca idK (lat kierowca + deltaLat ) (lon kierowca + deltaLon ) Nothing Nothing (wolne_miejsca kierowca)
-                              modifyMVar_ mv (\mapa -> pure (M.insert idK nowyKierowca mapa))
+                          let nowy_lat = lat kierowca + deltaLat
+                          let nowy_lon = lon kierowca + deltaLon
+                          if inPolygon cityQuad (nowy_lat, nowy_lon)
+                           then do
+                            let nowyKierowca = Kierowca idK nowy_lat nowy_lon Nothing Nothing (wolne_miejsca kierowca)
+                            modifyMVar_ mv (\mapa -> pure (M.insert idK nowyKierowca mapa))
+                           else 
+                            return ()
                     Just (lat_dest ,lon_dest) -> do 
                                             let nowy_lat = (lat kierowca) + signum (lat_dest - (lat kierowca )) * krok 
                                             let nowy_lon = (lon kierowca) + signum (lon_dest - (lon kierowca )) * krok 
@@ -71,5 +84,29 @@ odleglosc (latpas,longpas) kierowca = abs (latpas - (lat kierowca)) + abs (longp
                     
                     
                               
+type Point = (Double, Double)
+inPolygon :: [Point] -> Point -> Bool
+inPolygon poly (px, py) = odd (length crossings)
+    where
+      edges = zip poly (drop 1 poly ++ [head poly])
+      crossings = filter crosses edges
+      crosses ((x1, y1), (x2, y2)) =
+        ((y1 > py) /= (y2 > py))
+          && (px < (x2 - x1) * (py - y1) / (y2 - y1) + x1)
+triangularR :: (Double, Double) -> StdGen -> (Double, StdGen)
+triangularR (lo, hi) g0 =
+    let (a, g1) = uniformR (lo, hi) g0
+        (b, g2) = uniformR (lo, hi) g1
+     in ((a + b) / 2, g2)
 
-    
+randomInQuad :: [Point] -> StdGen -> (Point, StdGen)
+randomInQuad poly = go
+    where
+      lats = map fst poly
+      lons = map snd poly
+      (latLo, latHi) = (minimum lats, maximum lats)
+      (lonLo, lonHi) = (minimum lons, maximum lons)
+      go g0 =
+        let (lat, g1) = triangularR (latLo, latHi) g0
+            (lon, g2) = triangularR (lonLo, lonHi) g1
+         in if inPolygon poly (lat, lon) then ((lat, lon), g2) else go g2
