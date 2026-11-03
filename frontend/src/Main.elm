@@ -2,6 +2,7 @@ port module Main exposing (main)
 
 import Browser
 import Browser.Dom
+import Dict exposing (Dict)
 import Html exposing (Html, a, button, dd, details, div, dl, dt, figcaption, figure, footer, form, h1, h2, h3, header, img, input, label, li, main_, nav, node, option, p, section, select, span, summary, text, textarea, ul)
 import Html.Attributes exposing (alt, attribute, autocomplete, class, classList, disabled, for, height, href, id, maxlength, required, rows, selected, spellcheck, src, style, title, type_, value, width)
 import Html.Events exposing (on, onClick, onInput, onSubmit)
@@ -18,9 +19,14 @@ port zapiszToken : String -> Cmd msg
 port usunToken : () -> Cmd msg
 
 
-{-| flagą jest token zapamiętany w localStorage (albo null)
+{-| auta, które użytkownik może ocenić, zapamiętane w localStorage: { email: [id auta] }
 -}
-main : Program (Maybe String) Model Msg
+port zapiszOceny : E.Value -> Cmd msg
+
+
+{-| flagi: { token: zapamiętany token albo null, oceny: to, co zapisał port zapiszOceny }
+-}
+main : Program D.Value Model Msg
 main =
     Browser.element
         { init = init
@@ -49,6 +55,7 @@ type alias Model =
     , stan : Stan
     , flota : List Kierowca
     , pytanie : String
+    , oceny : Dict String (List String)
     }
 
 
@@ -74,6 +81,18 @@ type alias Sesja =
     , wybrane : Maybe String
     , zam : FormZamowienia
     , kom : FormKomentarzy
+    , przejazd : Maybe String
+    , doOceny : List String
+    , zakonczony : Maybe String
+    , wersja : Int
+    }
+
+
+{-| odpowiedź /ja: e-mail i id auta, jeśli użytkownik ma teraz aktywny przejazd
+-}
+type alias Ja =
+    { email : String
+    , przejazd : Maybe String
     }
 
 
@@ -83,13 +102,36 @@ type Strona
     | StronaKomentarze
 
 
+{-| cel to punkt, do którego auto jedzie teraz; celKoncowy jest ustawiony tylko wtedy,
+gdy auto jedzie jeszcze po klienta (cel = odbiór, celKoncowy = miejsce docelowe)
+-}
 type alias Kierowca =
     { id : String
     , lat : Float
     , lon : Float
     , cel : Maybe ( Float, Float )
+    , celKoncowy : Maybe ( Float, Float )
     , wolne : Int
     }
+
+
+type EtapKursu
+    = Wolne
+    | PoKlienta ( Float, Float ) ( Float, Float )
+    | DoCelu ( Float, Float )
+
+
+etapAuta : Kierowca -> EtapKursu
+etapAuta k =
+    case ( k.cel, k.celKoncowy ) of
+        ( Just odbior, Just meta ) ->
+            PoKlienta odbior meta
+
+        ( Just meta, Nothing ) ->
+            DoCelu meta
+
+        ( Nothing, _ ) ->
+            Wolne
 
 
 type Punkt
@@ -118,7 +160,6 @@ type alias FormZamowienia =
 type StanZam
     = ZamPisanie (Maybe String)
     | ZamWysylanie
-    | ZamGotowe Kierowca
 
 
 type alias Komentarz =
@@ -171,14 +212,25 @@ puste =
     }
 
 
-nowaSesja : String -> String -> Sesja
-nowaSesja email token =
-    { email = email
+{-| z aktywnym przejazdem od razu pokazujemy zakładkę zamówienia
+-}
+nowaSesja : Model -> String -> Ja -> Sesja
+nowaSesja model token ja =
+    { email = ja.email
     , token = token
-    , strona = StronaAuta
+    , strona =
+        if ja.przejazd == Nothing then
+            StronaAuta
+
+        else
+            StronaZamowienie
     , wybrane = Nothing
     , zam = pustaZamowienie
     , kom = puste
+    , przejazd = ja.przejazd
+    , doOceny = Maybe.withDefault [] (Dict.get ja.email model.oceny)
+    , zakonczony = Nothing
+    , wersja = 0
     }
 
 
@@ -191,18 +243,29 @@ poczatek =
     , stan = Formularz Nothing
     , flota = []
     , pytanie = "nas jest troje"
+    , oceny = Dict.empty
     }
 
 
-init : Maybe String -> ( Model, Cmd Msg )
-init zapamietany =
+init : D.Value -> ( Model, Cmd Msg )
+init flagi =
+    let
+        zapamietany =
+            Result.withDefault Nothing (D.decodeValue (D.field "token" (D.nullable D.string)) flagi)
+
+        oceny =
+            Result.withDefault Dict.empty (D.decodeValue (D.field "oceny" (D.dict (D.list D.string))) flagi)
+
+        model =
+            { poczatek | oceny = oceny }
+    in
     case zapamietany of
         Just token ->
             -- sesja z poprzedniej wizyty: sprawdzamy u backendu, czy token nadal działa
-            ( { poczatek | stan = Sprawdzanie }, Cmd.batch [ przywroc token, pobierzKierowcow ] )
+            ( { model | stan = Sprawdzanie }, Cmd.batch [ przywroc token, pobierzKierowcow ] )
 
         Nothing ->
-            ( poczatek, pobierzKierowcow )
+            ( model, pobierzKierowcow )
 
 
 {-| wraca do strony głównej, ale zostawia flotę i to, co ktoś wpisał w pytanie
@@ -225,8 +288,10 @@ type Msg
     | Zarejestruj
     | OdpowiedzLogin (Result Http.Error String)
     | OdpowiedzRejestracja (Result Http.Error String)
-    | OdpowiedzJa String (Result Http.Error String)
-    | OdpowiedzPrzywrocenie String (Result Http.Error String)
+    | OdpowiedzJa String (Result Http.Error Ja)
+    | OdpowiedzPrzywrocenie String (Result Http.Error Ja)
+    | OdpowiedzStanu Int (Result Http.Error Ja)
+    | ZamknijKomunikat
     | Wyloguj
     | OdpowiedzWyloguj (Result Http.Error ())
     | NicNieRob
@@ -255,8 +320,39 @@ type Msg
     | OdpowiedzWystawienia (Result Http.Error ())
 
 
+{-| po każdej zmianie sprawdzamy, czy lista aut do oceny się zmieniła, i jeśli tak,
+zapisujemy ją w localStorage, żeby przeżyła odświeżenie strony
+-}
 update : Msg -> Model -> ( Model, Cmd Msg )
 update msg model =
+    let
+        ( nowy, cmd ) =
+            przetworz msg model
+    in
+    case nowy.stan of
+        Zalogowany s ->
+            if Maybe.withDefault [] (Dict.get s.email nowy.oceny) == s.doOceny then
+                ( nowy, cmd )
+
+            else
+                let
+                    oceny =
+                        if List.isEmpty s.doOceny then
+                            Dict.remove s.email nowy.oceny
+
+                        else
+                            Dict.insert s.email s.doOceny nowy.oceny
+                in
+                ( { nowy | oceny = oceny }
+                , Cmd.batch [ cmd, zapiszOceny (E.dict identity (E.list E.string) oceny) ]
+                )
+
+        _ ->
+            ( nowy, cmd )
+
+
+przetworz : Msg -> Model -> ( Model, Cmd Msg )
+przetworz msg model =
     case msg of
         WpisanoEmail email ->
             ( { model | email = email }, Cmd.none )
@@ -295,16 +391,16 @@ update msg model =
         OdpowiedzRejestracja (Err blad) ->
             ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
 
-        OdpowiedzJa token (Ok email) ->
-            ( { model | haslo = "", powtorz = "", stan = Zalogowany (nowaSesja email token) }
+        OdpowiedzJa token (Ok ja) ->
+            ( { model | haslo = "", powtorz = "", stan = Zalogowany (nowaSesja model token ja) }
             , Cmd.batch [ zapiszToken token, naGore ]
             )
 
         OdpowiedzJa _ (Err blad) ->
             ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
 
-        OdpowiedzPrzywrocenie token (Ok email) ->
-            ( { model | stan = Zalogowany (nowaSesja email token) }, Cmd.none )
+        OdpowiedzPrzywrocenie token (Ok ja) ->
+            ( { model | stan = Zalogowany (nowaSesja model token ja) }, Cmd.none )
 
         OdpowiedzPrzywrocenie _ (Err (Http.BadStatus 401)) ->
             -- token wygasł albo został unieważniony
@@ -334,7 +430,42 @@ update msg model =
             ( { model | pytanie = pytanie }, Cmd.none )
 
         Tik _ ->
-            ( model, pobierzKierowcow )
+            case model.stan of
+                Zalogowany s ->
+                    -- zalogowanemu sprawdzamy też /ja, bo tylko stamtąd wiadomo, czy przejazd trwa
+                    ( model, Cmd.batch [ pobierzKierowcow, pobierzStan s.token s.wersja ] )
+
+                _ ->
+                    ( model, pobierzKierowcow )
+
+        OdpowiedzStanu wersja (Ok ja) ->
+            zSesja
+                (\s ->
+                    if wersja /= s.wersja then
+                        -- odpowiedź na pytanie wysłane przed złożeniem zamówienia, już nieaktualna
+                        ( s, Cmd.none )
+
+                    else
+                        case ( s.przejazd, ja.przejazd ) of
+                            ( Just id, Nothing ) ->
+                                -- backend zapomniał przejazd: auto dowiozło klienta, można je ocenić
+                                ( { s | przejazd = Nothing, zakonczony = Just id, doOceny = id :: List.filter ((/=) id) s.doOceny }
+                                , Cmd.none
+                                )
+
+                            ( _, nowy ) ->
+                                ( { s | przejazd = nowy }, Cmd.none )
+                )
+                model
+
+        OdpowiedzStanu _ (Err (Http.BadStatus 401)) ->
+            sesjaWygasla model
+
+        OdpowiedzStanu _ (Err _) ->
+            ( model, Cmd.none )
+
+        ZamknijKomunikat ->
+            zSesja (\s -> ( { s | zakonczony = Nothing }, Cmd.none )) model
 
         OdpowiedzKierowcy (Ok lista) ->
             ( { model | flota = List.sortBy numerAuta lista }, Cmd.none )
@@ -403,7 +534,7 @@ update msg model =
                     in
                     case Maybe.map5 (zamow s.token) (parsuj z.startLat) (parsuj z.startLon) (parsuj z.celLat) (parsuj z.celLon) (String.toInt z.miejsca) of
                         Just cmd ->
-                            ( { s | zam = { z | stan = ZamWysylanie } }, cmd )
+                            ( { s | zam = { z | stan = ZamWysylanie }, wersja = s.wersja + 1 }, cmd )
 
                         Nothing ->
                             ( { s | zam = { z | stan = ZamPisanie (Just "Podaj poprawne współrzędne albo kliknij na mapie.") } }, Cmd.none )
@@ -411,7 +542,17 @@ update msg model =
                 model
 
         OdpowiedzZamowienie (Ok kierowca) ->
-            zSesja (\s -> let z = s.zam in ( { s | zam = { z | stan = ZamGotowe kierowca } }, Cmd.none )) model
+            zSesja
+                (\s ->
+                    let
+                        z =
+                            s.zam
+                    in
+                    ( { s | zam = { z | stan = ZamPisanie Nothing }, przejazd = Just kierowca.id, zakonczony = Nothing, wersja = s.wersja + 1 }
+                    , Cmd.none
+                    )
+                )
+                model
 
         OdpowiedzZamowienie (Err (Http.BadStatus 401)) ->
             sesjaWygasla model
@@ -467,7 +608,10 @@ update msg model =
                             ( { s | kom = { k | blad = Just "Najpierw wybierz auto.", info = Nothing } }, Cmd.none )
 
                         Just id ->
-                            if String.trim k.tresc == "" then
+                            if not (List.member id s.doOceny) then
+                                ( { s | kom = { k | blad = Just "Opinię wystawisz po zakończonym przejeździe tym autem.", info = Nothing } }, Cmd.none )
+
+                            else if String.trim k.tresc == "" then
                                 ( { s | kom = { k | blad = Just "Wpisz treść opinii.", info = Nothing } }, Cmd.none )
 
                             else
@@ -484,7 +628,12 @@ update msg model =
                         k =
                             s.kom
                     in
-                    ( { s | kom = { k | wysylanie = False, tresc = "", info = Just "Dziękujemy za opinię." } }
+                    -- jeden przejazd to jedna opinia: auto znika z listy do oceny
+                    ( { s
+                        | kom = { k | wysylanie = False, tresc = "", info = Just "Dziękujemy za opinię." }
+                        , doOceny = List.filter (\id -> Just id /= k.wybrany) s.doOceny
+                        , zakonczony = if s.zakonczony == k.wybrany then Nothing else s.zakonczony
+                      }
                     , case k.wybrany of
                         Just id ->
                             pobierzKomentarze s.token id
@@ -936,7 +1085,7 @@ pobierzJa token =
         , headers = [ naglowekBearer token ]
         , url = "/ja"
         , body = Http.emptyBody
-        , expect = Http.expectJson (OdpowiedzJa token) D.string
+        , expect = Http.expectJson (OdpowiedzJa token) jaDekoder
         , timeout = Nothing
         , tracker = Nothing
         }
@@ -949,10 +1098,32 @@ przywroc token =
         , headers = [ naglowekBearer token ]
         , url = "/ja"
         , body = Http.emptyBody
-        , expect = Http.expectJson (OdpowiedzPrzywrocenie token) D.string
+        , expect = Http.expectJson (OdpowiedzPrzywrocenie token) jaDekoder
         , timeout = Nothing
         , tracker = Nothing
         }
+
+
+{-| co 2 sekundy: czy przejazd nadal trwa; wersja pozwala odrzucić spóźnione odpowiedzi
+-}
+pobierzStan : String -> Int -> Cmd Msg
+pobierzStan token wersja =
+    Http.request
+        { method = "GET"
+        , headers = [ naglowekBearer token ]
+        , url = "/ja"
+        , body = Http.emptyBody
+        , expect = Http.expectJson (OdpowiedzStanu wersja) jaDekoder
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
+jaDekoder : D.Decoder Ja
+jaDekoder =
+    D.map2 Ja
+        (D.field "mojemail" D.string)
+        (D.field "przejadz" (D.nullable D.string))
 
 
 wylogujNaSerwerze : String -> Cmd Msg
@@ -1042,11 +1213,16 @@ wystawKomentarz token id ocena tresc =
 
 kierowcaDekoder : D.Decoder Kierowca
 kierowcaDekoder =
-    D.map5 Kierowca
+    let
+        para =
+            D.nullable (D.map2 Tuple.pair (D.index 0 D.float) (D.index 1 D.float))
+    in
+    D.map6 Kierowca
         (D.field "idKierowcy" D.string)
         (D.field "lat" D.float)
         (D.field "lon" D.float)
-        (D.field "cel" (D.nullable (D.map2 Tuple.pair (D.index 0 D.float) (D.index 1 D.float))))
+        (D.field "cel" para)
+        (D.field "celKoncowy" para)
         (D.field "wolne_miejsca" D.int)
 
 
@@ -1082,18 +1258,22 @@ flotaJson flota =
                     , ( "lat", E.float k.lat )
                     , ( "lon", E.float k.lon )
                     , ( "wolne", E.int k.wolne )
-                    , ( "cel"
-                      , case k.cel of
-                            Just ( la, lo ) ->
-                                E.list E.float [ la, lo ]
-
-                            Nothing ->
-                                E.null
-                      )
+                    , ( "cel", punktJson k.cel )
+                    , ( "celKoncowy", punktJson k.celKoncowy )
                     ]
             )
             flota
         )
+
+
+punktJson : Maybe ( Float, Float ) -> E.Value
+punktJson punkt =
+    case punkt of
+        Just ( la, lo ) ->
+            E.list E.float [ la, lo ]
+
+        Nothing ->
+            E.null
 
 
 punktyJson : List Znacznik -> String
@@ -1346,8 +1526,8 @@ sekcjaJak =
             (List.map etap
                 [ Etap "Kilka sekund" "Najpierw wskazujesz na mapie start i cel, i liczbę osób." 6 "granat"
                 , Etap "Od razu" "Potem Unter wybiera najbliższe wolne auto z miejscem dla was." 1 "czern"
-                , Etap "Kilkanaście sekund" "Wtedy auto rusza do celu, a mapa pokazuje je co 2 sekundy." 16 "popiel"
-                , Etap "Około minuty" "Na koniec oceniasz kierowcę od 1 do 5 gwiazdek." 24 "kamien"
+                , Etap "Kilkanaście sekund" "Wtedy auto podjeżdża po was i wiezie do celu, a mapa pokazuje je co 2 sekundy." 20 "popiel"
+                , Etap "Około minuty" "Na koniec, po dojechaniu, oceniasz kierowcę od 1 do 5 gwiazdek." 24 "kamien"
                 ]
             )
         ]
@@ -1369,10 +1549,10 @@ sekcjaPytania =
             (List.map wierszPytania
                 [ ( "Ile osób zmieści jedno zamówienie?", "Od jednej do czterech. Unter bierze pod uwagę tylko auta, które mają tyle wolnych miejsc." )
                 , ( "Jak Unter wybiera auto?", "Spośród wolnych aut z wystarczającą liczbą miejsc wysyła to, które stoi najbliżej punktu startu." )
-                , ( "Czy mogę zamówić dwa przejazdy naraz?", "Nie. Kolejny przejazd zamówisz, gdy auto z poprzedniego dojedzie do celu." )
-                , ( "Dlaczego czasem muszę chwilę poczekać?", "Logowanie, zamówienie i opinia działają raz na 30 sekund z jednego adresu. To ochrona przed spamem." )
+                , ( "Czy mogę zamówić dwa przejazdy naraz?", "Nie. Trwający przejazd widać w aplikacji na każdej zakładce, a kolejny zamówisz, gdy ten się zakończy." )
+                , ( "Dlaczego czasem muszę chwilę poczekać?", "Logowanie, rejestracja, zamówienie i opinia działają raz na 30 sekund z jednego adresu. To ochrona przed spamem." )
                 , ( "Kto widzi moją opinię?", "Wszyscy zalogowani. Zamiast całego adresu e-mail pokazujemy tylko jego pierwszą literę i domenę." )
-                , ( "Jak długo zostanę zalogowany?", "Do wylogowania. Przeglądarka pamięta sesję także po odświeżeniu strony." )
+                , ( "Kiedy mogę ocenić kierowcę?", "Po zakończonym przejeździe. Aplikacja sama zaproponuje opinię, gdy auto dowiezie was do celu." )
                 ]
             )
         ]
@@ -1570,19 +1750,82 @@ widokAplikacji flota s =
             ]
         , div [ class "app__cialo" ]
             [ main_ [ class "panel" ]
-                (case s.strona of
-                    StronaAuta ->
-                        widokAut flota s
+                (komunikatyPrzejazdu flota s
+                    ++ (case s.strona of
+                            StronaAuta ->
+                                widokAut flota s
 
-                    StronaZamowienie ->
-                        widokZamowienia flota s
+                            StronaZamowienie ->
+                                widokZamowienia flota s
 
-                    StronaKomentarze ->
-                        widokOpinii flota s
+                            StronaKomentarze ->
+                                widokOpinii flota s
+                       )
                 )
             , mapa3d flota s
             ]
         ]
+
+
+{-| aktywny przejazd widać na każdej zakładce; po dojechaniu pojawia się zaproszenie do oceny
+-}
+komunikatyPrzejazdu : List Kierowca -> Sesja -> List (Html Msg)
+komunikatyPrzejazdu flota s =
+    let
+        koniec =
+            case s.zakonczony of
+                Just id ->
+                    if s.strona == StronaKomentarze && s.kom.wybrany == Just id then
+                        []
+
+                    else
+                        [ div [ class "baner baner--koniec", attribute "role" "status" ]
+                            [ p [ class "baner__tekst" ] [ text ("Przejazd autem #" ++ id ++ " zakończony. Jak było?") ]
+                            , div [ class "baner__akcje" ]
+                                [ button [ type_ "button", class "przycisk przycisk--maly", onClick (OtworzOpinie id) ] [ text "Oceń kierowcę" ]
+                                , button [ type_ "button", class "przycisk-tekst", onClick ZamknijKomunikat ] [ text "Później" ]
+                                ]
+                            ]
+                        ]
+
+                Nothing ->
+                    []
+
+        trwa =
+            case s.przejazd of
+                Just id ->
+                    if s.strona == StronaZamowienie then
+                        []
+
+                    else
+                        [ div [ class "baner", attribute "role" "status" ]
+                            [ p [ class "baner__tekst" ] [ text (opisPrzejazdu flota id) ]
+                            , button [ type_ "button", class "przycisk-tekst", onClick (IdzDo StronaZamowienie) ] [ text "Pokaż" ]
+                            ]
+                        ]
+
+                Nothing ->
+                    []
+    in
+    koniec ++ trwa
+
+
+opisPrzejazdu : List Kierowca -> String -> String
+opisPrzejazdu flota id =
+    case znajdzAuto flota id of
+        Just k ->
+            case etapAuta k of
+                PoKlienta ( la, lo ) _ ->
+                    "Auto #" ++ id ++ " jedzie po Ciebie, jest " ++ jednoMiejsce (odlegloscKm k.lat k.lon la lo) ++ " km od miejsca odbioru."
+
+                DoCelu ( la, lo ) ->
+                    "Jedziesz autem #" ++ id ++ ". Do celu zostało " ++ jednoMiejsce (odlegloscKm k.lat k.lon la lo) ++ " km."
+
+                Wolne ->
+                    "Auto #" ++ id ++ " właśnie dojeżdża na miejsce."
+
+        Nothing ->
+            "Twój przejazd autem #" ++ id ++ " trwa."
 
 
 zakladka : Sesja -> Strona -> String -> Html Msg
@@ -1608,26 +1851,23 @@ więc Elm jej nie podmienia i WebGL nie startuje od nowa przy każdym kliknięci
 mapa3d : List Kierowca -> Sesja -> Html Msg
 mapa3d flota s =
     let
-        z =
-            s.zam
-
-        gotowe =
-            case z.stan of
-                ZamGotowe k ->
-                    Just k.id
-
-                _ ->
-                    Nothing
-
         punkty =
-            if s.strona == StronaZamowienie then
-                punktyZamowienia z
-
-            else
+            if s.strona /= StronaZamowienie then
                 []
 
+            else
+                case ( s.przejazd, Maybe.andThen (znajdzAuto flota) s.przejazd ) of
+                    ( Just _, Just k ) ->
+                        punktyPrzejazdu s.zam k
+
+                    ( Just _, Nothing ) ->
+                        []
+
+                    ( Nothing, _ ) ->
+                        punktyZamowienia s.zam
+
         klikalna =
-            s.strona == StronaZamowienie && gotowe == Nothing
+            s.strona == StronaZamowienie && s.przejazd == Nothing
 
         wybrane =
             case s.strona of
@@ -1635,7 +1875,7 @@ mapa3d flota s =
                     s.wybrane
 
                 StronaZamowienie ->
-                    gotowe
+                    s.przejazd
 
                 StronaKomentarze ->
                     s.kom.wybrany
@@ -1660,6 +1900,22 @@ mapa3d flota s =
         [ mapa klikalna flota punkty ]
 
 
+{-| pinezki trwającego przejazdu: dopóki auto jedzie po klienta, oba punkty są w danych auta;
+potem zostaje tylko cel, a start bierzemy z formularza (jeśli zamówienie złożono w tej sesji)
+-}
+punktyPrzejazdu : FormZamowienia -> Kierowca -> List Znacznik
+punktyPrzejazdu z k =
+    case etapAuta k of
+        PoKlienta ( la, lo ) ( ca, co ) ->
+            [ Znacznik "start" la lo "S", Znacznik "cel" ca co "C" ]
+
+        DoCelu ( ca, co ) ->
+            List.filter (\p -> p.klasa == "start") (punktyZamowienia z) ++ [ Znacznik "cel" ca co "C" ]
+
+        Wolne ->
+            punktyZamowienia z
+
+
 znajdzAuto : List Kierowca -> String -> Maybe Kierowca
 znajdzAuto flota id =
     List.head (List.filter (\k -> k.id == id) flota)
@@ -1667,12 +1923,20 @@ znajdzAuto flota id =
 
 statusAuta : Kierowca -> String
 statusAuta k =
-    if k.cel == Nothing then
-        "wolne"
+    case etapAuta k of
+        Wolne ->
+            "wolne"
 
-    else
-        "w trasie"
+        PoKlienta _ _ ->
+            "po klienta"
 
+        DoCelu _ ->
+            "w trasie"
+
+
+statusKlasa : Kierowca -> String
+statusKlasa k =
+    "plakietka plakietka--" ++ String.replace " " "-" (statusAuta k)
 
 
 -- auta
@@ -1717,11 +1981,15 @@ kartaAuta k przyciski =
         [ auto3d "karta-auta__model" kl (k.cel == Nothing)
         , h2 [ class "karta-auta__tytul" ] [ text ("#" ++ k.id ++ " · " ++ kl.nazwa) ]
         , dl [ class "dane dane--kompakt" ]
-            [ div [ class "dane__wiersz" ] [ dt [] [ text "Status" ], dd [] [ span [ class ("plakietka plakietka--" ++ String.replace " " "-" (statusAuta k)) ] [ text (statusAuta k) ] ] ]
+            [ div [ class "dane__wiersz" ] [ dt [] [ text "Status" ], dd [] [ span [ class (statusKlasa k) ] [ text (statusAuta k) ] ] ]
             , div [ class "dane__wiersz" ] [ dt [] [ text "Wolne miejsca" ], dd [] [ text (String.fromInt k.wolne) ] ]
             , div [ class "dane__wiersz" ] [ dt [] [ text "Pozycja" ], dd [] [ text (zaokr4 k.lat ++ ", " ++ zaokr4 k.lon) ] ]
             ]
-        , div [ class "przyciski" ] przyciski
+        , if List.isEmpty przyciski then
+            text ""
+
+          else
+            div [ class "przyciski" ] przyciski
         ]
 
 
@@ -1749,7 +2017,7 @@ wierszAuta wybrane k =
             ]
             [ span [ class "wiersz__nr" ] [ text ("#" ++ k.id) ]
             , span [ class "wiersz__klasa" ] [ text kl.nazwa ]
-            , span [ class ("plakietka plakietka--" ++ String.replace " " "-" (statusAuta k)) ] [ text (statusAuta k) ]
+            , span [ class (statusKlasa k) ] [ text (statusAuta k) ]
             , span [ class "wiersz__miejsca" ] [ text (miejsc k.wolne) ]
             ]
         ]
@@ -1879,92 +2147,144 @@ znacznikPunktu g z =
 
 widokZamowienia : List Kierowca -> Sesja -> List (Html Msg)
 widokZamowienia flota s =
-    let
-        z =
-            s.zam
-    in
-    case z.stan of
-        ZamGotowe przydzielony ->
+    case s.przejazd of
+        Just id ->
+            widokPrzejazdu flota id
+
+        Nothing ->
+            formularzZamowienia flota s.zam
+
+
+widokPrzejazdu : List Kierowca -> String -> List (Html Msg)
+widokPrzejazdu flota id =
+    case znajdzAuto flota id of
+        Nothing ->
+            [ h1 [ class "panel__tytul" ] [ text "Twój przejazd" ]
+            , p [ class "panel__opis" ] [ text ("Szukamy auta #" ++ id ++ " na mapie…") ]
+            ]
+
+        Just k ->
             let
-                -- przydzielone auto śledzimy na żywo w odświeżanej liście
-                k =
-                    Maybe.withDefault przydzielony (znajdzAuto flota przydzielony.id)
+                biezacy =
+                    etapAuta k
+
+                ( tytul, opis ) =
+                    case biezacy of
+                        PoKlienta ( la, lo ) _ ->
+                            ( "Auto #" ++ id ++ " jedzie po Ciebie"
+                            , "Do miejsca odbioru zostało " ++ jednoMiejsce (odlegloscKm k.lat k.lon la lo) ++ " km. Czekaj przy pinezce Start."
+                            )
+
+                        DoCelu ( la, lo ) ->
+                            ( "Jesteś w drodze"
+                            , "Do celu zostało " ++ jednoMiejsce (odlegloscKm k.lat k.lon la lo) ++ " km."
+                            )
+
+                        Wolne ->
+                            ( "Jesteś na miejscu", "Za chwilę zamkniemy przejazd i poprosimy o opinię." )
             in
-            [ h1 [ class "panel__tytul" ] [ text ("Przydzielono auto #" ++ k.id) ]
-            , p [ class "panel__opis", attribute "aria-live" "polite" ]
-                [ text
-                    (if k.cel == Nothing then
-                        "Auto dojechało do celu. Możesz zamówić kolejny przejazd."
+            [ h1 [ class "panel__tytul" ] [ text tytul ]
+            , p [ class "panel__opis", attribute "aria-live" "polite" ] [ text opis ]
+            , etapyPrzejazdu biezacy
+            , kartaAuta k []
+            , p [ class "podpowiedz" ] [ text "Kolejny przejazd zamówisz, gdy ten się zakończy. Wtedy też ocenisz kierowcę." ]
+            ]
+
+
+etapyPrzejazdu : EtapKursu -> Html Msg
+etapyPrzejazdu biezacy =
+    let
+        teraz =
+            case biezacy of
+                PoKlienta _ _ ->
+                    0
+
+                DoCelu _ ->
+                    1
+
+                Wolne ->
+                    2
+
+        krokPrzejazdu i napis =
+            li
+                [ classList [ ( "kroki__krok", True ), ( "kroki__krok--zrobiony", i < teraz ), ( "kroki__krok--teraz", i == teraz ) ]
+                , attribute "aria-current"
+                    (if i == teraz then
+                        "step"
 
                      else
-                        "Auto jedzie do celu. Śledź je na mapie."
+                        "false"
                     )
                 ]
-            , kartaAuta k
-                [ button [ type_ "button", class "przycisk przycisk--ciemny", onClick NoweZamowienie ] [ text "Nowe zamówienie" ]
-                , button [ type_ "button", class "przycisk-drugi", onClick (OtworzOpinie k.id) ] [ text "Opinie o tym aucie" ]
-                ]
+                [ text napis ]
+    in
+    ul [ class "kroki", attribute "aria-label" "Etapy przejazdu" ]
+        [ krokPrzejazdu 0 "Dojazd po Ciebie"
+        , krokPrzejazdu 1 "W drodze do celu"
+        , krokPrzejazdu 2 "Na miejscu"
+        ]
+
+
+formularzZamowienia : List Kierowca -> FormZamowienia -> List (Html Msg)
+formularzZamowienia flota z =
+    let
+        wysylanie =
+            z.stan == ZamWysylanie
+
+        ile =
+            Maybe.withDefault 1 (String.toInt z.miejsca)
+
+        pasujace =
+            List.filter (\k -> k.wolne >= ile) (wolneAuta flota)
+
+        klasy =
+            List.filter (\kl -> kl.miejsca >= ile) [ mini, komfort, kombi, xl ]
+    in
+    [ h1 [ class "panel__tytul" ] [ text "Zamów przejazd" ]
+    , p [ class "panel__opis" ] [ text "Kliknij mapę, aby ustawić punkt, albo wpisz współrzędne." ]
+    , div [ class "segment", attribute "role" "group", attribute "aria-label" "Który punkt ustawiasz na mapie" ]
+        [ przyciskSegmentu (z.ustawiam == Start) (UstawPunkt Start) "Ustawiam start"
+        , przyciskSegmentu (z.ustawiam == Cel) (UstawPunkt Cel) "Ustawiam cel"
+        ]
+    , form [ class "formularz", onSubmit Zamow ]
+        [ div [ class "wsp" ]
+            [ poleWsp "Start, szerokość" "slat" z.startLat StartLat
+            , poleWsp "Start, długość" "slon" z.startLon StartLon
+            , poleWsp "Cel, szerokość" "clat" z.celLat CelLat
+            , poleWsp "Cel, długość" "clon" z.celLon CelLon
             ]
-
-        _ ->
-            let
-                wysylanie =
-                    z.stan == ZamWysylanie
-
-                ile =
-                    Maybe.withDefault 1 (String.toInt z.miejsca)
-
-                pasujace =
-                    List.filter (\k -> k.wolne >= ile) (wolneAuta flota)
-
-                klasy =
-                    List.filter (\kl -> kl.miejsca >= ile) [ mini, komfort, kombi, xl ]
-            in
-            [ h1 [ class "panel__tytul" ] [ text "Zamów przejazd" ]
-            , p [ class "panel__opis" ] [ text "Kliknij mapę, aby ustawić punkt, albo wpisz współrzędne." ]
-            , div [ class "segment", attribute "role" "group", attribute "aria-label" "Który punkt ustawiasz na mapie" ]
-                [ przyciskSegmentu (z.ustawiam == Start) (UstawPunkt Start) "Ustawiam start"
-                , przyciskSegmentu (z.ustawiam == Cel) (UstawPunkt Cel) "Ustawiam cel"
-                ]
-            , form [ class "formularz", onSubmit Zamow ]
-                [ div [ class "wsp" ]
-                    [ poleWsp "Start, szerokość" "slat" z.startLat StartLat
-                    , poleWsp "Start, długość" "slon" z.startLon StartLon
-                    , poleWsp "Cel, szerokość" "clat" z.celLat CelLat
-                    , poleWsp "Cel, długość" "clon" z.celLon CelLon
-                    ]
-                , p [ class "etykieta", id "ile-osob" ] [ text "Liczba osób" ]
-                , div [ class "segment segment--liczby", attribute "role" "group", attribute "aria-labelledby" "ile-osob" ]
-                    (List.map
-                        (\n -> przyciskSegmentu (String.fromInt n == z.miejsca) (WpisanoMiejsca (String.fromInt n)) (String.fromInt n))
-                        [ 1, 2, 3, 4 ]
-                    )
-                , p [ class "pasuje" ]
-                    [ text
-                        ("Pasują klasy: "
-                            ++ String.join ", " (List.map .nazwa klasy)
-                            ++ ". Wolnych pasujących aut: "
-                            ++ String.fromInt (List.length pasujace)
-                            ++ "."
-                        )
-                    ]
-                , case z.stan of
-                    ZamPisanie (Just tresc) ->
-                        p [ class "blad", attribute "role" "alert" ] [ text tresc ]
-
-                    _ ->
-                        text ""
-                , button [ type_ "submit", class "przycisk przycisk--pelny", disabled wysylanie ]
-                    [ text
-                        (if wysylanie then
-                            "Wysyłanie…"
-
-                         else
-                            "Zamów przejazd"
-                        )
-                    ]
-                ]
+        , p [ class "etykieta", id "ile-osob" ] [ text "Liczba osób" ]
+        , div [ class "segment segment--liczby", attribute "role" "group", attribute "aria-labelledby" "ile-osob" ]
+            (List.map
+                (\n -> przyciskSegmentu (String.fromInt n == z.miejsca) (WpisanoMiejsca (String.fromInt n)) (String.fromInt n))
+                [ 1, 2, 3, 4 ]
+            )
+        , p [ class "pasuje" ]
+            [ text
+                ("Pasują klasy: "
+                    ++ String.join ", " (List.map .nazwa klasy)
+                    ++ ". Wolnych pasujących aut: "
+                    ++ String.fromInt (List.length pasujace)
+                    ++ "."
+                )
             ]
+        , case z.stan of
+            ZamPisanie (Just tresc) ->
+                p [ class "blad", attribute "role" "alert" ] [ text tresc ]
+
+            _ ->
+                text ""
+        , button [ type_ "submit", class "przycisk przycisk--pelny", disabled wysylanie ]
+            [ text
+                (if wysylanie then
+                    "Wysyłanie…"
+
+                 else
+                    "Zamów przejazd"
+                )
+            ]
+        ]
+    ]
 
 
 poleWsp : String -> String -> String -> Pole -> Html Msg
@@ -2004,6 +2324,16 @@ widokOpinii flota s =
             s.kom
     in
     [ h1 [ class "panel__tytul" ] [ text "Opinie o kierowcach" ]
+    , if List.isEmpty s.doOceny then
+        text ""
+
+      else
+        div [ class "do-oceny" ]
+            (p [ class "etykieta" ] [ text "Czekają na Twoją ocenę" ]
+                :: List.map
+                    (\id -> button [ type_ "button", class "przycisk-drugi", onClick (WybranoKierowce id) ] [ text ("Auto #" ++ id) ])
+                    s.doOceny
+            )
     , div [ class "pole" ]
         [ label [ for "auto" ] [ text "Auto" ]
         , select [ id "auto", onInput WybranoKierowce ]
@@ -2040,8 +2370,18 @@ widokOpinii flota s =
                     :: List.map widokOpinii1 lista
                 )
     , case k.wybrany of
-        Just _ ->
-            formularzOpinii k
+        Just id ->
+            if List.member id s.doOceny then
+                formularzOpinii k
+
+            else if k.info /= Nothing then
+                p [ class "komunikat komunikat--ok" ] [ text (Maybe.withDefault "" k.info) ]
+
+            else if s.przejazd == Just id then
+                p [ class "podpowiedz podpowiedz--ramka" ] [ text "Jedziesz teraz tym autem. Opinię wystawisz, gdy przejazd się zakończy." ]
+
+            else
+                p [ class "podpowiedz podpowiedz--ramka" ] [ text "Opinię wystawisz po zakończonym przejeździe tym autem." ]
 
         Nothing ->
             text ""

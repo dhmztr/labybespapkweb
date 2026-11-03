@@ -638,6 +638,7 @@ class UnterMiasto extends Scena3D {
         wpis.start = teraz;
       }
       wpis.cel = a.cel;
+      wpis.celKoncowy = a.celKoncowy || null;
       ustawKoguta(wpis.obiekt, wolne);
     }
     for (const [id, wpis] of this.auta) {
@@ -645,9 +646,10 @@ class UnterMiasto extends Scena3D {
       this.flota.remove(wpis.obiekt);
       zwolnij(wpis.obiekt);
       if (wpis.trasa) {
-        this.znaczniki.remove(wpis.trasa, wpis.metaGrupa);
+        this.znaczniki.remove(wpis.trasa, wpis.metaGrupa, wpis.odbior);
         zwolnij(wpis.trasa);
         zwolnij(wpis.metaGrupa);
+        zwolnij(wpis.odbior);
       }
       this.auta.delete(id);
     }
@@ -748,33 +750,42 @@ class UnterMiasto extends Scena3D {
     return this.srodek.lerp(suma, 0.02);
   }
 
+  // Trasa zajętego auta: przerywana linia auto → cel. Gdy auto jedzie jeszcze po klienta,
+  // cel to miejsce odbioru, a linia biegnie dalej do celKoncowy; odbiór ma wtedy własne kółko.
   rysujTrase(wpis, pozycja) {
     if (!wpis.cel) {
       if (wpis.trasa) {
-        this.znaczniki.remove(wpis.trasa, wpis.metaGrupa);
+        this.znaczniki.remove(wpis.trasa, wpis.metaGrupa, wpis.odbior);
         zwolnij(wpis.trasa);
         zwolnij(wpis.metaGrupa);
+        zwolnij(wpis.odbior);
         wpis.trasa = null;
       }
       return;
     }
-    const meta = this.naSwiat(wpis.cel[0], wpis.cel[1]);
+    const przystanek = this.naSwiat(wpis.cel[0], wpis.cel[1]);
+    const meta = wpis.celKoncowy ? this.naSwiat(wpis.celKoncowy[0], wpis.celKoncowy[1]) : przystanek.clone();
     if (!wpis.trasa) {
-      const geo = new THREE.BufferGeometry().setFromPoints([pozycja.clone(), meta]);
+      const geo = new THREE.BufferGeometry().setFromPoints([pozycja.clone(), przystanek, meta]);
       wpis.trasa = new THREE.Line(geo, new THREE.LineDashedMaterial({ color: KOLOR.granat, dashSize: 1.2, gapSize: 0.8 }));
-      wpis.metaGrupa = new THREE.Mesh(
-        new THREE.RingGeometry(0.8, 1.4, 32),
-        new THREE.MeshBasicMaterial({ color: KOLOR.granat, side: THREE.DoubleSide }),
-      );
-      wpis.metaGrupa.rotation.x = -Math.PI / 2;
-      this.znaczniki.add(wpis.trasa, wpis.metaGrupa);
+      const kolko = (kolor) => {
+        const m = new THREE.Mesh(new THREE.RingGeometry(0.8, 1.4, 32), new THREE.MeshBasicMaterial({ color: kolor, side: THREE.DoubleSide }));
+        m.rotation.x = -Math.PI / 2;
+        return m;
+      };
+      wpis.metaGrupa = kolko(KOLOR.granat);
+      wpis.odbior = kolko(KOLOR.mandarynka);
+      this.znaczniki.add(wpis.trasa, wpis.metaGrupa, wpis.odbior);
     }
     const poz = wpis.trasa.geometry.attributes.position;
     poz.setXYZ(0, pozycja.x, 0.15, pozycja.z);
-    poz.setXYZ(1, meta.x, 0.15, meta.z);
+    poz.setXYZ(1, przystanek.x, 0.15, przystanek.z);
+    poz.setXYZ(2, meta.x, 0.15, meta.z);
     poz.needsUpdate = true;
     wpis.trasa.computeLineDistances();
     wpis.metaGrupa.position.set(meta.x, 0.1, meta.z);
+    wpis.odbior.visible = Boolean(wpis.celKoncowy);
+    wpis.odbior.position.set(przystanek.x, 0.12, przystanek.z);
   }
 
   // --- klikanie: auto albo punkt na mapie ---

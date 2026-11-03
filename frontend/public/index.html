@@ -473,6 +473,48 @@
     }
     .plakietka--wolne { background: #fde7cc; color: #6b3a00; }
     .plakietka--w-trasie { background: #e3e6ee; color: var(--ink); }
+    .plakietka--po-klienta { background: var(--ink); color: #fff; }
+
+    /* trwający i zakończony przejazd */
+    .baner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px 16px;
+      margin-bottom: 20px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      background: var(--ink);
+      color: #fff;
+      font-size: 15px;
+      animation: wjazd 400ms var(--ease) both;
+    }
+    .baner .przycisk-tekst { color: #fff; }
+    .baner .przycisk-tekst:hover { color: var(--field-2); }
+    .baner--koniec { background: #fde7cc; color: #4a2900; }
+    .baner--koniec .przycisk-tekst { color: #4a2900; }
+    .baner__tekst { flex: 1 1 200px; font-weight: 600; }
+    .baner__akcje { display: flex; align-items: center; gap: 12px; }
+    .kroki { display: flex; gap: 4px; list-style: none; margin: 0 0 20px; padding: 0; }
+    .kroki__krok {
+      flex: 1;
+      padding: 10px 10px 8px;
+      border-radius: 2px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.2;
+      transition: background-color 300ms, color 300ms;
+    }
+    .kroki__krok--zrobiony { background: var(--field-2); color: var(--ink); }
+    .kroki__krok--teraz { background: var(--accent); color: var(--accent-ink); }
+    .podpowiedz--ramka { padding: 14px 16px; border-radius: var(--radius); background: var(--surface); }
+    .do-oceny { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 16px 0 4px; }
+    .do-oceny .etykieta { width: 100%; margin: 0; }
+    .do-oceny .przycisk-drugi { min-height: 40px; padding: 8px 14px; background: #fde7cc; }
+    .do-oceny .przycisk-drugi:hover { background: #fbd6a8; }
 
     .karta-auta { margin-bottom: 24px; padding: 16px; border-radius: var(--radius); background: var(--surface); }
     .karta-auta__model { height: 190px; margin: -8px -8px 8px; }
@@ -650,14 +692,21 @@
   <script src="elm.js"></script>
   <script>
     var KLUCZ = "token";
+    var KLUCZ_OCEN = "doOceny";
     var zapamietany = null;
+    var oceny = {};
     try { zapamietany = localStorage.getItem(KLUCZ); } catch (e) {}
-    var app = Elm.Main.init({ node: document.getElementById("app"), flags: zapamietany });
+    try { oceny = JSON.parse(localStorage.getItem(KLUCZ_OCEN)) || {}; } catch (e) {}
+    var app = Elm.Main.init({ node: document.getElementById("app"), flags: { token: zapamietany, oceny: oceny } });
     app.ports.zapiszToken.subscribe(function (token) {
       try { localStorage.setItem(KLUCZ, token); } catch (e) {}
     });
     app.ports.usunToken.subscribe(function () {
       try { localStorage.removeItem(KLUCZ); } catch (e) {}
+    });
+    // auta do oceny, per e-mail: pozwolenie na opinię przeżywa odświeżenie strony
+    app.ports.zapiszOceny.subscribe(function (mapa) {
+      try { localStorage.setItem(KLUCZ_OCEN, JSON.stringify(mapa)); } catch (e) {}
     });
 
     // Postęp przewijania nagłówka (0..1) w zmiennej --p: z niej CSS przesuwa taśmę kadrów.
