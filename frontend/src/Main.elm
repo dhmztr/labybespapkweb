@@ -756,7 +756,7 @@ opisBledu blad =
             "Rejestracja nie powiodła się, spróbuj ponownie."
 
         Http.BadStatus 429 ->
-            "Za dużo prób naraz. Odczekaj 30 sekund i spróbuj ponownie."
+            "Za dużo prób naraz. Odczekaj 10 sekund i spróbuj ponownie."
 
         Http.NetworkError ->
             "Brak połączenia z serwerem."
@@ -775,7 +775,7 @@ opisBleduZamowienia blad =
             "Masz już aktywny przejazd."
 
         Http.BadStatus 429 ->
-            "Kolejne zamówienie złożysz za 30 sekund."
+            "Za dużo prób naraz. Zamówienie złożysz za 10 sekund."
 
         Http.NetworkError ->
             "Brak połączenia z serwerem."
@@ -788,7 +788,7 @@ opisBleduOpinii : Http.Error -> String
 opisBleduOpinii blad =
     case blad of
         Http.BadStatus 429 ->
-            "Kolejną opinię dodasz za 30 sekund."
+            "Za dużo prób naraz. Opinię dodasz za 10 sekund."
 
         _ ->
             "Nie udało się dodać opinii. Spróbuj ponownie."
@@ -1550,7 +1550,7 @@ sekcjaPytania =
                 [ ( "Ile osób zmieści jedno zamówienie?", "Od jednej do czterech. Unter bierze pod uwagę tylko auta, które mają tyle wolnych miejsc." )
                 , ( "Jak Unter wybiera auto?", "Spośród wolnych aut z wystarczającą liczbą miejsc wysyła to, które stoi najbliżej punktu startu." )
                 , ( "Czy mogę zamówić dwa przejazdy naraz?", "Nie. Trwający przejazd widać w aplikacji na każdej zakładce, a kolejny zamówisz, gdy ten się zakończy." )
-                , ( "Dlaczego czasem muszę chwilę poczekać?", "Logowanie, rejestracja, zamówienie i opinia działają raz na 30 sekund z jednego adresu. To ochrona przed spamem." )
+                , ( "Dlaczego czasem muszę chwilę poczekać?", "Logowanie, rejestracja, zamówienie i opinia mają wspólny limit kilku prób na 10 sekund z jednego adresu. To ochrona przed spamem." )
                 , ( "Kto widzi moją opinię?", "Wszyscy zalogowani. Zamiast całego adresu e-mail pokazujemy tylko jego pierwszą literę i domenę." )
                 , ( "Kiedy mogę ocenić kierowcę?", "Po zakończonym przejeździe. Aplikacja sama zaproponuje opinię, gdy auto dowiezie was do celu." )
                 ]
