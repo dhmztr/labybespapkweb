@@ -78,27 +78,33 @@ wygeneruj_kierowcow (ident:reszta) = do
 
 
 
-sprawdzCooldown :: MVar (M.Map String UTCTime) -> String -> NominalDiffTime -> IO Bool
-sprawdzCooldown mv klucz cooldown = do
+sprawdzCooldown :: MVar (M.Map String (UTCTime,Int)) -> String -> Int -> NominalDiffTime -> IO Bool
+sprawdzCooldown mv klucz prog czasokna = do
     teraz <- getCurrentTime 
     mapa <- readMVar mv
-    modifyMVar_ mv (\mapa -> pure (M.insert klucz teraz mapa ))
     case M.lookup klucz mapa of
         Nothing -> do
-                  modifyMVar_ mv (\mapa -> pure (M.insert klucz teraz mapa ))
+                  modifyMVar_ mv (\mapa -> pure (M.insert klucz (teraz ,0) mapa ))
                   return True
-        (Just czas) -> do 
-                  modifyMVar_ mv (\mapa -> pure (M.insert klucz teraz mapa ))
-                  if (diffUTCTime teraz czas) > cooldown 
-                    then return True
-                  else return False
-limiterIP :: MVar (M.Map String UTCTime) -> Middleware
+        (Just (czas,ilosc)) -> do 
+                  if (diffUTCTime teraz czas) > czasokna
+                    then do
+                      modifyMVar_ mv (\mapa -> pure (M.insert klucz (teraz ,1) mapa ))
+                      return True
+                  else 
+                    if ilosc > prog
+                      then return False
+                    else do
+                      modifyMVar_ mv (\mapa -> pure (M.insert klucz (teraz ,ilosc + 1) mapa ))
+                      return True
+                        
+
+limiterIP :: MVar (M.Map String (UTCTime,Int)) -> Middleware
 limiterIP mv app req respond =
  if pathInfo req `elem` [["login"], ["rejestracja"], ["wystawkomentarz"], ["zamowienie"]]
   then do 
         let ip = takeWhile (/= ':') (show (remoteHost req))
-        let klucz = ip ++ show (pathInfo req )
-        dozwolone <- sprawdzCooldown mv klucz 30
+        dozwolone <- sprawdzCooldown mv ip 5 10
         if dozwolone
           then app req respond
           else respond (responseLBS status429 [] "Za duzo zapytan")
