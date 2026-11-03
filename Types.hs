@@ -35,6 +35,7 @@ data Kierowca = Kierowca
     , lat :: Double
     , lon :: Double
     , cel :: Maybe (Double, Double)
+    , celKoncowy :: Maybe (Double, Double)
     , wolne_miejsca :: Int
     }
     deriving (Show, Generic)
@@ -50,6 +51,12 @@ data KomentarzReq = KomentarzReq
     { reqidkier :: String
     }
     deriving (Show, Generic)
+data JaOdpowiedz = JaOdpowiedz
+    { mojemail :: String
+    , przejadz :: Maybe String
+    }
+    deriving (Show, Generic)
+
 instance FromJSON Poswiadczenia
 instance ToJSON Odpowiedz
 instance ToSchema Poswiadczenia
@@ -67,3 +74,5 @@ instance FromJSON Komentarz
 instance ToSchema Komentarz
 instance FromJSON KomentarzReq
 instance ToSchema KomentarzReq
+instance ToJSON JaOdpowiedz
+instance ToSchema JaOdpowiedz

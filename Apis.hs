@@ -40,8 +40,8 @@ kierowcy mv = do
                 inner <- liftIO (readMVar mv)
 
                 return (M.elems inner)
-zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Maybe String -> Zamowienie -> (Handler Kierowca)
-zamowienie mvtokeny mvprzejazdy mvkierowcy naglowek zamowieniereq = case naglowek of
+zamowienie :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) -> Connection -> Maybe String -> Zamowienie -> (Handler Kierowca)
+zamowienie mvtokeny mvprzejazdy mvkierowcy conn naglowek zamowieniereq = case naglowek of
     (Just rawtok) -> do
         case (stripPrefix "Bearer " rawtok) of
             Just x -> do
@@ -71,9 +71,28 @@ zamowienie mvtokeny mvprzejazdy mvkierowcy naglowek zamowieniereq = case naglowe
                                         
                                             let kierowca = (znajdzKierowce ((lat_startowy zamowienieOk ) ,(lon_startowy zamowienieOk)) (miejsca zamowienieOk) kierowcy)
                                             liftIO (modifyMVar_ mvprzejazdy (\mapa -> pure (M.insert usermail (idKierowcy kierowca) mapa)))
-                                            let zmodyfikowany = Kierowca (idKierowcy kierowca ) (lat kierowca) (lon kierowca ) (Just ((lat_koncowy zamowienieOk ),(lon_koncowy zamowienieOk ))) (wolne_miejsca kierowca )
-                                            liftIO (modifyMVar_ mvkierowcy (\mapa -> pure (M.insert (idKierowcy kierowca) zmodyfikowany mapa ) ))
-                                            return zmodyfikowany 
+                                            let zmodyfikowany = Kierowca (idKierowcy kierowca ) (lat kierowca) (lon kierowca ) 
+                                                    (Just ((lat_startowy zamowienieOk ), (lon_startowy zamowienieOk )))
+                                                    (Just ((lat_koncowy zamowienieOk ), (lon_koncowy zamowienieOk ))) (wolne_miejsca kierowca)
+
+                                            let iduserquery = "SELECT id FROM users WHERE email = ?"
+                                            iduseraraw <- liftIO (query conn iduserquery (Only usermail) :: IO [Only Int])
+                                            if length iduseraraw == 0 then throwError err403 {errBody = BL8.pack ("User doesnt exist in database")}
+                                            else do 
+                                                let idusera = head (map fromOnly iduseraraw)
+                                                let insertquery = "INSERT INTO rides (client_id,vehicle_id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng) VALUES (?,?,?,?,?,?)"
+                                                zwroconazbazy <- liftIO (try (execute conn insertquery 
+                                                    (idusera, (read (idKierowcy kierowca) :: Int), lat_startowy zamowienieOk, lon_startowy
+                                                    zamowienieOk, lat_koncowy zamowienieOk, lon_koncowy zamowienieOk)))
+                                                case zwroconazbazy of
+                                                    Left ( e::SqlError ) -> throwError err500 
+                                                    Right (_) -> do
+                                                    
+                                                        liftIO (modifyMVar_ mvkierowcy (\mapa -> pure (M.insert (idKierowcy kierowca) zmodyfikowany mapa ) ))
+                                                        return zmodyfikowany 
+                                                
+
+
                             Left powod -> throwError (err400{errBody = (BL8.pack ("Nie mozna ukonczyc zamowienia: " ++ powod))})
                     Nothing -> throwError (err401{errBody = BL8.pack ("Wygasly token ")})
             Nothing -> throwError err401
@@ -107,13 +126,34 @@ login mv conn user = do
 
 zdrowie :: (Handler String)
 zdrowie = return "ok"
-ja :: MVar (M.Map String String) -> Maybe String -> Handler String
-ja mv header = case header of
+ja :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Maybe String -> Handler JaOdpowiedz 
+ja mvtokeny mvprzejazdy mvkierowcy header = case header of
     Just x -> do
         case (stripPrefix "Bearer " x ) of
             Just tok -> do 
-                mapa <- liftIO (readMVar mv)
-                maybe (throwError err401) return (M.lookup tok mapa)
+                mapatokeny <- liftIO (readMVar mvtokeny )
+                case M.lookup tok mapatokeny of
+                 Nothing -> throwError err401 
+                 Just (mail) -> do
+                                mapaprzejazdy <- liftIO (readMVar mvprzejazdy )
+                                case M.lookup mail mapaprzejazdy of
+                                    Nothing -> return (JaOdpowiedz mail Nothing)
+                                    Just (idK) -> do
+                                                mapakierowcow <- liftIO (readMVar mvkierowcy )
+                                                case M.lookup idK mapakierowcow  of
+                                                    Nothing -> do
+                                                        liftIO (modifyMVar_ mvprzejazdy (\mapa -> pure (M.delete mail mapa )))
+                                                        return (JaOdpowiedz mail Nothing)
+                                                    Just (kier) -> do
+                                                            case (cel kier) of
+                                                                Just (_,_) -> return (JaOdpowiedz mail (Just (idK )))
+                                                                Nothing -> do
+                                                                        liftIO (modifyMVar_ mvprzejazdy (\mapa -> pure (M.delete mail mapa )))
+                                                                        return (JaOdpowiedz mail Nothing)
+
+
+
+
             Nothing -> throwError err401 
     Nothing -> throwError err401
 wyloguj :: MVar (M.Map String String) -> Maybe String -> (Handler String) 

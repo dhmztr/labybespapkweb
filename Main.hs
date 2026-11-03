@@ -42,7 +42,7 @@ dokument = toSwagger (Proxy :: Proxy API)
 type API =
   "zdrowie" :> Get '[JSON] String
     :<|> "login" :> ReqBody '[JSON] Poswiadczenia :> Post '[JSON] Odpowiedz
-    :<|> "ja" :> Header "Authorization" String :> Get '[JSON] String
+    :<|> "ja" :> Header "Authorization" String :> Get '[JSON] JaOdpowiedz
     :<|> "zamowienie" :> Header "Authorization" String :> ReqBody '[JSON] Zamowienie :> Post '[JSON] Kierowca
     :<|> "rejestracja" :> ReqBody '[JSON] Poswiadczenia :> Post '[JSON] Odpowiedz
     :<|> "wyloguj" :> Header "Authorization" String :> Post '[JSON] String
@@ -50,7 +50,7 @@ type API =
     :<|> "komentarze" :>  Header "Authorization" String :> ReqBody '[JSON] KomentarzReq :> Post '[JSON] [Komentarz]
     :<|> "wystawkomentarz" :> Header "Authorization"  String :> ReqBody '[JSON] Komentarz :> Post '[JSON] String
 serwer :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Connection -> Server FullAPI
-serwer mvtokeny mvprzejazdy mvkierowcy conn = (zdrowie :<|> login mvtokeny conn :<|> ja mvtokeny :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy :<|> rejestracja mvtokeny conn :<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy mvtokeny conn :<|> dodajKomentarz mvtokeny conn) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
+serwer mvtokeny mvprzejazdy mvkierowcy conn = (zdrowie :<|> login mvtokeny conn :<|> ja mvtokeny mvprzejazdy mvkierowcy  :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy conn :<|> rejestracja mvtokeny conn :<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy mvtokeny conn :<|> dodajKomentarz mvtokeny conn) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do
@@ -72,7 +72,7 @@ wygeneruj_kierowcow (ident:reszta) = do
                         lat_start<- randomRIO (51.05,51.15)
                         lon_start <- randomRIO (16.90,17.10)
                         miejsca <- randomRIO (2,5)
-                        let kierowca = Kierowca {idKierowcy = show (fromOnly (ident)), lat = lat_start,lon = lon_start,cel = Nothing,wolne_miejsca = miejsca }
+                        let kierowca = Kierowca {idKierowcy = show (fromOnly (ident)), lat = lat_start,lon = lon_start,cel = Nothing,celKoncowy=Nothing,wolne_miejsca = miejsca }
                         reszta_kierowcow <- liftIO( wygeneruj_kierowcow reszta )
                         return (kierowca:reszta_kierowcow )
 
@@ -97,7 +97,8 @@ limiterIP mv app req respond =
  if pathInfo req `elem` [["login"], ["rejestracja"], ["wystawkomentarz"], ["zamowienie"]]
   then do 
         let ip = takeWhile (/= ':') (show (remoteHost req))
-        dozwolone <- sprawdzCooldown mv ip 30
+        let klucz = ip ++ show (pathInfo req )
+        dozwolone <- sprawdzCooldown mv klucz 30
         if dozwolone
           then app req respond
           else respond (responseLBS status429 [] "Za duzo zapytan")

@@ -37,14 +37,20 @@ petlaKierowcy mv idK = do
           let kierowca = inside M.! idK 
           case (cel kierowca) of 
                     Nothing -> do 
-                              let nowyKierowca = Kierowca idK (lat kierowca + deltaLat ) (lon kierowca + deltaLon ) Nothing (wolne_miejsca kierowca)
+                              let nowyKierowca = Kierowca idK (lat kierowca + deltaLat ) (lon kierowca + deltaLon ) Nothing Nothing (wolne_miejsca kierowca)
                               modifyMVar_ mv (\mapa -> pure (M.insert idK nowyKierowca mapa))
                     Just (lat_dest ,lon_dest) -> do 
                                             let nowy_lat = (lat kierowca) + signum (lat_dest - (lat kierowca )) * krok 
                                             let nowy_lon = (lon kierowca) + signum (lon_dest - (lon kierowca )) * krok 
                                             if odleglosc (lat_dest,lon_dest) (kierowca {  lat = nowy_lat, lon = nowy_lon }) <= krok 
-                                              then modifyMVar_ mv (\mapa -> pure (M.insert idK (kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = Nothing,wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
-                                              else modifyMVar_ mv (\mapa -> pure (M.insert idK (kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = (cel kierowca ),wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
+                                              then 
+                                                case celKoncowy kierowca of
+                                                  Nothing -> modifyMVar_ mv (\mapa -> pure (M.insert idK (Kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = Nothing,celKoncowy = Nothing,wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
+                                                  (Just (lat_cel,lon_cel)) -> 
+                                                    modifyMVar_ mv (\mapa -> pure (M.insert idK (Kierowca 
+                                                    {idKierowcy = idK ,lat=nowy_lat ,lon=nowy_lon ,cel = Just (lat_cel ,lon_cel ),
+                                                    celKoncowy=Nothing,wolne_miejsca= (wolne_miejsca kierowca )}) mapa))
+                                              else modifyMVar_ mv (\mapa -> pure (M.insert idK (kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = (cel kierowca ),celKoncowy = (celKoncowy kierowca), wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
           petlaKierowcy mv idK
 
                                         
