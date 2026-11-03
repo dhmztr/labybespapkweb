@@ -56,6 +56,20 @@ data JaOdpowiedz = JaOdpowiedz
     , przejadz :: Maybe String
     }
     deriving (Show, Generic)
+data WyswietlZamowieniaReq = WyswietlZamowieniaReq
+    { emailklienta :: String
+    }
+    deriving (Show, Generic)
+data Przejazd = Przejazd
+    { vehicle_id :: Int
+    , pickup_lat :: Double
+    , pickup_lng :: Double
+    , dropoff_lat :: Double
+    , dropoff_lng :: Double
+    , status :: String
+    , created_at :: String
+    }
+    deriving (Show, Generic)
 
 instance FromJSON Poswiadczenia
 instance ToJSON Odpowiedz
@@ -76,3 +90,5 @@ instance FromJSON KomentarzReq
 instance ToSchema KomentarzReq
 instance ToJSON JaOdpowiedz
 instance ToSchema JaOdpowiedz
+instance ToJSON Przejazd
+instance ToSchema Przejazd

@@ -51,8 +51,9 @@ type API =
     :<|> "kierowcy" :> Get '[JSON] [Kierowca]
     :<|> "komentarze" :>  Header "Authorization" String :> ReqBody '[JSON] KomentarzReq :> Post '[JSON] [Komentarz]
     :<|> "wystawkomentarz" :> Header "Authorization"  String :> ReqBody '[JSON] Komentarz :> Post '[JSON] String
+    :<|> "mojeprzejazdy" :> Header "Authorization" String :> Get '[JSON] [Przejazd]
 serwer :: MVar (M.Map String String) -> MVar (M.Map String String) -> MVar (M.Map String Kierowca) ->  Pool Connection -> Server FullAPI
-serwer mvtokeny mvprzejazdy mvkierowcy conn = (zdrowie :<|> login mvtokeny conn :<|> ja mvtokeny mvprzejazdy mvkierowcy  :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy conn :<|> rejestracja mvtokeny conn :<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy mvtokeny conn :<|> dodajKomentarz mvtokeny conn) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
+serwer mvtokeny mvprzejazdy mvkierowcy pool = (zdrowie :<|> login mvtokeny pool:<|> ja mvtokeny mvprzejazdy mvkierowcy  :<|> zamowienie mvtokeny mvprzejazdy mvkierowcy pool:<|> rejestracja mvtokeny pool:<|> wyloguj mvtokeny :<|> kierowcy mvkierowcy :<|> komentarzedlakierowcy mvtokeny pool:<|> dodajKomentarz mvtokeny pool:<|> mojeZamowienia mvtokeny pool) :<|> swaggerSchemaUIServer dokument :<|> serveDirectoryFileServer "frontend/public"
 
 main :: IO ()
 main = do

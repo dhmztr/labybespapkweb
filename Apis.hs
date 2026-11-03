@@ -32,6 +32,7 @@ import Cars (znajdzKierowce)
 import Data.Time.Clock (getCurrentTime)
 import Text.HTML.SanitizeXSS (sanitize)
 import Data.Pool (Pool, withResource)
+import Control.Monad.Error.Class (MonadError(throwError))
 
 
 passwordHash :: PasswordHash Argon2
@@ -214,6 +215,31 @@ dodajKomentarz mv pool authtoken kom = do
                                                              Left (e :: SqlError ) -> throwError err500 
                                                              (Right _) ->  return "OK"
                                         Nothing -> throwError err401 
+mojeZamowienia:: MVar (M.Map String String) -> Pool Connection -> Maybe String -> (Handler [Przejazd])
+mojeZamowienia mvtokeny pool authtoken = do 
+                    case authtoken of
+                        Nothing -> throwError err401
+                        Just (tok) -> do
+                                    let strippedToken = stripPrefix "Bearer " tok 
+                                    case strippedToken of
+                                        (Just validToken) -> do
+                                            innermap <- liftIO (readMVar mvtokeny )
+                                            case M.lookup validToken innermap of
+                                                Nothing -> throwError err401 
+                                                (Just usermail) -> do
+                                                        let iduserquery = "SELECT id FROM users WHERE email = ?"
+                                                        iduseraraw <- liftIO (withResource pool $ \conn -> do 
+                                                                query conn iduserquery (Only usermail) :: IO [Only Int])
+                                                        let idusera = head (map fromOnly iduseraraw)
+                                                        let ridesquery = "SELECT vehicle_id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,status,created_at FROM rides WHERE client_id = ?"
+                                                        przejazdyraw <- liftIO (withResource pool $ \conn -> 
+                                                            query conn ridesquery (Only idusera) :: IO [( Int, Double, Double, Double, Double, String, String)]) 
+                                                        let przejazdy = parseprzejazdy przejazdyraw
+                                                        return przejazdy
+                                                        
+
+
+                                
 generujToken :: IO String
 generujToken = do
   bytesarr <- getRandomBytes 32 :: IO BS.ByteString
@@ -254,4 +280,7 @@ zweryfikujKomentarz idk datakom ocenakier wystawiajacykom tresckom
                                 
 sanitizeString :: String -> String
 sanitizeString wartosc = T.unpack (sanitize (T.pack wartosc ))
-    
+
+parseprzejazdy :: [(Int, Double, Double, Double, Double, String, String)] -> [Przejazd]
+parseprzejazdy [] = []
+parseprzejazdy ((a,b,c,d,e,f,g):reszta) = (Przejazd a b c d e f g  ):parseprzejazdy reszta
