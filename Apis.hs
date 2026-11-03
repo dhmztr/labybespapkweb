@@ -231,7 +231,7 @@ mojeZamowienia mvtokeny pool authtoken = do
                                                         iduseraraw <- liftIO (withResource pool $ \conn -> do 
                                                                 query conn iduserquery (Only usermail) :: IO [Only Int])
                                                         let idusera = head (map fromOnly iduseraraw)
-                                                        let ridesquery = "SELECT vehicle_id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,status,created_at FROM rides WHERE client_id = ?"
+                                                        let ridesquery = "SELECT vehicle_id,pickup_lat,pickup_lng,dropoff_lat,dropoff_lng,status,created_at::text FROM rides WHERE client_id = ?"
                                                         przejazdyraw <- liftIO (withResource pool $ \conn -> 
                                                             query conn ridesquery (Only idusera) :: IO [( Int, Double, Double, Double, Double, String, String)]) 
                                                         let przejazdy = parseprzejazdy przejazdyraw
