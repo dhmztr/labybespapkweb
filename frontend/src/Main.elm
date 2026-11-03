@@ -85,6 +85,7 @@ type alias Sesja =
     , doOceny : List String
     , zakonczony : Maybe String
     , wersja : Int
+    , historia : Historia
     }
 
 
@@ -99,6 +100,7 @@ type alias Ja =
 type Strona
     = StronaAuta
     | StronaZamowienie
+    | StronaPrzejazdy
     | StronaKomentarze
 
 
@@ -177,6 +179,26 @@ type Lista
     | ListaBlad
 
 
+{-| jeden wiersz z /mojeprzejazdy; auto to vehicle_id zamienione na tekst, tak jak id aut w reszcie aplikacji
+-}
+type alias Przejazd =
+    { auto : String
+    , startLat : Float
+    , startLon : Float
+    , celLat : Float
+    , celLon : Float
+    , status : String
+    , data : String
+    }
+
+
+type Historia
+    = HistoriaPusta
+    | HistoriaLaduje
+    | HistoriaGotowa (List Przejazd)
+    | HistoriaBlad
+
+
 type alias FormKomentarzy =
     { wybrany : Maybe String
     , lista : Lista
@@ -231,6 +253,7 @@ nowaSesja model token ja =
     , doOceny = Maybe.withDefault [] (Dict.get ja.email model.oceny)
     , zakonczony = Nothing
     , wersja = 0
+    , historia = HistoriaPusta
     }
 
 
@@ -311,6 +334,8 @@ type Msg
     | Zamow
     | OdpowiedzZamowienie (Result Http.Error Kierowca)
     | NoweZamowienie
+      -- przejazdy
+    | OdpowiedzPrzejazdy (Result Http.Error (List Przejazd))
       -- opinie
     | WybranoKierowce String
     | OdpowiedzKomentarze String (Result Http.Error (List Komentarz))
@@ -475,7 +500,16 @@ przetworz msg model =
             ( model, Cmd.none )
 
         IdzDo strona ->
-            zSesja (\s -> ( { s | strona = strona }, Cmd.none )) model
+            zSesja
+                (\s ->
+                    if strona == StronaPrzejazdy then
+                        -- historię pobieramy przy każdym wejściu w zakładkę, więc zawsze jest aktualna
+                        ( { s | strona = strona, historia = HistoriaLaduje }, pobierzPrzejazdy s.token )
+
+                    else
+                        ( { s | strona = strona }, Cmd.none )
+                )
+                model
 
         WybranoAuto id ->
             zSesja
@@ -562,6 +596,21 @@ przetworz msg model =
 
         NoweZamowienie ->
             zSesja (\s -> ( { s | zam = pustaZamowienie }, Cmd.none )) model
+
+        OdpowiedzPrzejazdy (Err (Http.BadStatus 401)) ->
+            sesjaWygasla model
+
+        OdpowiedzPrzejazdy wynik ->
+            zSesja
+                (\s ->
+                    case wynik of
+                        Ok lista ->
+                            ( { s | historia = HistoriaGotowa lista }, Cmd.none )
+
+                        Err _ ->
+                            ( { s | historia = HistoriaBlad }, Cmd.none )
+                )
+                model
 
         WybranoKierowce id ->
             zSesja (wybierzKierowce id) model
@@ -1171,6 +1220,19 @@ zamow token startLat startLon celLat celLon ileMiejsc =
         }
 
 
+pobierzPrzejazdy : String -> Cmd Msg
+pobierzPrzejazdy token =
+    Http.request
+        { method = "GET"
+        , headers = [ naglowekBearer token ]
+        , url = "/mojeprzejazdy"
+        , body = Http.emptyBody
+        , expect = Http.expectJson OdpowiedzPrzejazdy (D.list przejazdDekoder)
+        , timeout = Nothing
+        , tracker = Nothing
+        }
+
+
 {-| mimo że to odczyt, backend chce POST z ciałem {"reqidkier": ...}
 -}
 pobierzKomentarze : String -> String -> Cmd Msg
@@ -1224,6 +1286,18 @@ kierowcaDekoder =
         (D.field "cel" para)
         (D.field "celKoncowy" para)
         (D.field "wolne_miejsca" D.int)
+
+
+przejazdDekoder : D.Decoder Przejazd
+przejazdDekoder =
+    D.map7 Przejazd
+        (D.field "vehicle_id" (D.map String.fromInt D.int))
+        (D.field "pickup_lat" D.float)
+        (D.field "pickup_lng" D.float)
+        (D.field "dropoff_lat" D.float)
+        (D.field "dropoff_lng" D.float)
+        (D.field "status" D.string)
+        (D.field "created_at" D.string)
 
 
 komentarzDekoder : D.Decoder Komentarz
@@ -1741,6 +1815,7 @@ widokAplikacji flota s =
             , nav [ class "app__zakladki", attribute "aria-label" "Aplikacja" ]
                 [ zakladka s StronaAuta "Auta"
                 , zakladka s StronaZamowienie "Zamów"
+                , zakladka s StronaPrzejazdy "Przejazdy"
                 , zakladka s StronaKomentarze "Opinie"
                 ]
             , div [ class "app__konto" ]
@@ -1757,6 +1832,9 @@ widokAplikacji flota s =
 
                             StronaZamowienie ->
                                 widokZamowienia flota s
+
+                            StronaPrzejazdy ->
+                                widokPrzejazdow s
 
                             StronaKomentarze ->
                                 widokOpinii flota s
@@ -1876,6 +1954,9 @@ mapa3d flota s =
 
                 StronaZamowienie ->
                     s.przejazd
+
+                StronaPrzejazdy ->
+                    s.wybrane
 
                 StronaKomentarze ->
                     s.kom.wybrany
@@ -2311,6 +2392,65 @@ punktyZamowienia z =
         [ Maybe.map2 (\a b -> Znacznik "start" a b "S") (parsuj z.startLat) (parsuj z.startLon)
         , Maybe.map2 (\a b -> Znacznik "cel" a b "C") (parsuj z.celLat) (parsuj z.celLon)
         ]
+
+
+
+-- przejazdy
+
+
+widokPrzejazdow : Sesja -> List (Html Msg)
+widokPrzejazdow s =
+    [ h1 [ class "panel__tytul" ] [ text "Moje przejazdy" ]
+    , case s.historia of
+        HistoriaPusta ->
+            text ""
+
+        HistoriaLaduje ->
+            p [ class "podpowiedz" ] [ text "Ładowanie przejazdów…" ]
+
+        HistoriaBlad ->
+            p [ class "blad" ] [ text "Nie udało się pobrać przejazdów." ]
+
+        HistoriaGotowa [] ->
+            p [ class "podpowiedz" ] [ text "Nie masz jeszcze żadnych przejazdów. Pierwszy zamówisz w zakładce „Zamów”." ]
+
+        HistoriaGotowa lista ->
+            div [ class "opinie" ]
+                (p [ class "opinie__srednia" ] [ text ("Liczba przejazdów: " ++ String.fromInt (List.length lista)) ]
+                    :: List.map widokWierszaPrzejazdu (List.reverse (List.sortBy .data lista))
+                )
+    ]
+
+
+widokWierszaPrzejazdu : Przejazd -> Html Msg
+widokWierszaPrzejazdu p =
+    div [ class "opinia" ]
+        [ div [ class "opinia__naglowek" ]
+            [ span [ class "opinia__autor" ] [ text ("Auto #" ++ p.auto ++ " · " ++ String.left 16 (String.replace "T" " " p.data)) ]
+            , span [ class "etykieta" ] [ text (opisStatusu p.status) ]
+            ]
+        , text ("Z " ++ zaokr4 p.startLat ++ ", " ++ zaokr4 p.startLon ++ " do " ++ zaokr4 p.celLat ++ ", " ++ zaokr4 p.celLon)
+        , div []
+            [ button [ type_ "button", class "przycisk-drugi", onClick (OtworzOpinie p.auto) ] [ text "Opinie o aucie" ] ]
+        ]
+
+
+{-| backend zapisuje status jako tekst ("requested" to wartość domyślna z bazy); nieznane statusy pokazujemy bez zmian
+-}
+opisStatusu : String -> String
+opisStatusu status =
+    case status of
+        "requested" ->
+            "Zamówiony"
+
+        "completed" ->
+            "Zakończony"
+
+        "cancelled" ->
+            "Anulowany"
+
+        inny ->
+            inny
 
 
 
