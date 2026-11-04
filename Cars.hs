@@ -27,7 +27,7 @@ import Types (Kierowca (lat, lon))
 import Data.Function (on)
 import System.Random (randomRIO,StdGen,uniformR )
 krok :: Double
-krok = 0.01
+krok = 0.001
 cityQuad :: [Point]
 cityQuad =
     [ (51.2302, 16.9939) -- A
@@ -38,8 +38,8 @@ cityQuad =
 petlaKierowcy :: MVar (M.Map String Kierowca) -> String -> IO ()
 petlaKierowcy mv idK = do
           threadDelay 1000000
-          deltaLat <- randomRIO (-0.01 ,0.01) :: IO Double
-          deltaLon <- randomRIO (-0.01, 0.01)  :: IO Double
+          deltaLat <- randomRIO (-0.001 ,0.001) :: IO Double
+          deltaLon <- randomRIO (-0.001, 0.001)  :: IO Double
           inside <- readMVar mv 
           let kierowca = inside M.! idK 
           case (cel kierowca) of 
@@ -56,14 +56,18 @@ petlaKierowcy mv idK = do
                                             let nowy_lat = (lat kierowca) + signum (lat_dest - (lat kierowca )) * krok 
                                             let nowy_lon = (lon kierowca) + signum (lon_dest - (lon kierowca )) * krok 
                                             if odleglosc (lat_dest,lon_dest) (kierowca {  lat = nowy_lat, lon = nowy_lon }) <= krok 
-                                              then 
-                                                case celKoncowy kierowca of
+                                            then do
+                                             case celKoncowy kierowca of
                                                   Nothing -> modifyMVar_ mv (\mapa -> pure (M.insert idK (Kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = Nothing,celKoncowy = Nothing,wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
-                                                  (Just (lat_cel,lon_cel)) -> 
+                                                  (Just (lat_cel,lon_cel)) -> do 
                                                     modifyMVar_ mv (\mapa -> pure (M.insert idK (Kierowca 
-                                                    {idKierowcy = idK ,lat=nowy_lat ,lon=nowy_lon ,cel = Just (lat_cel ,lon_cel ),
-                                                    celKoncowy=Nothing,wolne_miejsca= (wolne_miejsca kierowca )}) mapa))
-                                              else modifyMVar_ mv (\mapa -> pure (M.insert idK (kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = (cel kierowca ),celKoncowy = (celKoncowy kierowca), wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
+                                                      {idKierowcy = idK ,lat=nowy_lat ,lon=nowy_lon ,cel = Just (lat_cel ,lon_cel ),
+                                                      celKoncowy=Nothing,wolne_miejsca= (wolne_miejsca kierowca )}) mapa))
+                                                    threadDelay 5000000
+                                            else do 
+                                                
+                                              modifyMVar_ mv (\mapa -> pure (M.insert idK (kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = (cel kierowca ),celKoncowy = (celKoncowy kierowca), wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
+                                              threadDelay 5000000
           petlaKierowcy mv idK
 
                                         
