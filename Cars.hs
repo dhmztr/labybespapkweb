@@ -63,11 +63,9 @@ petlaKierowcy mv idK = do
                                                     modifyMVar_ mv (\mapa -> pure (M.insert idK (Kierowca 
                                                       {idKierowcy = idK ,lat=nowy_lat ,lon=nowy_lon ,cel = Just (lat_cel ,lon_cel ),
                                                       celKoncowy=Nothing,wolne_miejsca= (wolne_miejsca kierowca )}) mapa))
-                                                    threadDelay 5000000
                                             else do 
                                                 
                                               modifyMVar_ mv (\mapa -> pure (M.insert idK (kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = (cel kierowca ),celKoncowy = (celKoncowy kierowca), wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
-                                              threadDelay 5000000
           petlaKierowcy mv idK
 
                                         

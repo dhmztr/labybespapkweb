@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeOperators #-}
 module Apis where
-
+import Data.Int (Int64)
 import Types
 import Control.Concurrent (modifyMVar_)
 import Control.Concurrent.MVar
@@ -225,18 +225,32 @@ dodajKomentarz rconn pool authtoken kom = do
                                             emailquery <- liftIO (pobierzEmail rconn validToken )
                                             case emailquery of
                                                 Nothing -> throwError err401 
-                                                (Just wystawiajacyemail) ->  do
-                                                    let zapytanie = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
+                                                (Just usermail) ->  do
                                                     aktualna_data <- liftIO (getCurrentTime )
-                                                    let zweryfikowany = zweryfikujKomentarz (idKier kom) (show aktualna_data ) (ocena kom) wystawiajacyemail (tresc kom )
+                                                    let zweryfikowany = zweryfikujKomentarz (idKier kom) (show aktualna_data ) (ocena kom) usermail (tresc kom )
                                                     case zweryfikowany  of
                                                         (Left powod) -> throwError err406 {errBody = BL8.pack (powod )}
                                                         (Right poprawnykom) -> do
-
-                                                            operacja <- liftIO (withResource pool $ \conn -> try (execute conn zapytanie ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),wystawiajacyemail , tresc poprawnykom)))
-                                                            case operacja  of
-                                                             Left (e :: SqlError ) -> throwError err500 
-                                                             (Right _) ->  return "OK"
+                                                                        
+                                                            let iduserquery = "SELECT id FROM users WHERE email = ?"
+                                                            iduseraraw <- 
+                                                                    liftIO ( withResource pool $ \conn -> do 
+                                                                    query conn iduserquery (Only usermail) :: IO [Only Int])
+                                                            if length iduseraraw == 0 then throwError err403 {errBody = BL8.pack ("User doesnt exist in database")}
+                                                                else do 
+                                                             let ridequery = "SELECT id from rides WHERE client_id = ? And vehicle_id = ?"
+                                                             let idusera = head (map fromOnly iduseraraw)
+                                                             iloscraw <- liftIO ( withResource pool $ \conn -> try (execute conn ridequery (idusera, (read (idKier kom)) :: Int )) :: IO (Either SqlError Int64))
+                                                             case iloscraw of 
+                                                                (Left _) -> throwError err500 
+                                                                (Right ilosc) -> if ilosc >= 1 then do 
+                                                                                let query = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
+                                                                                operacja <- liftIO (withResource pool $ \conn -> try (execute conn query ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),usermail, tresc poprawnykom)))
+                                                                                case operacja  of
+                                                                                 Left (e :: SqlError ) -> throwError err500 
+                                                                                 (Right _) ->  return "OK"
+                                                                        else
+                                                                            throwError err403 
                                         Nothing -> throwError err401 
 mojeZamowienia:: R.Connection -> Pool Connection -> Maybe String -> (Handler [Przejazd])
 mojeZamowienia rconn pool authtoken = do 
