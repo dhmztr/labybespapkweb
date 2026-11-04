@@ -2548,7 +2548,7 @@ widokOpinii flota s =
             (option [ value "", selected (k.wybrany == Nothing) ] [ text "Wybierz auto…" ]
                 :: List.map
                     (\a -> option [ value a.id, selected (k.wybrany == Just a.id) ] [ text ("#" ++ a.id ++ " · " ++ (klasaAuta a).nazwa) ])
-                    flota
+                    (List.filter (\a -> List.member a.id s.doOceny || k.wybrany == Just a.id) flota)
             )
         ]
     , case k.lista of
