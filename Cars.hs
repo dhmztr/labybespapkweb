@@ -27,7 +27,7 @@ import Types (Kierowca (lat, lon))
 import Data.Function (on)
 import System.Random (randomRIO,StdGen,uniformR )
 krok :: Double
-krok = 0.01
+krok = 0.001
 cityQuad :: [Point]
 cityQuad =
     [ (51.2302, 16.9939) -- A
@@ -37,9 +37,9 @@ cityQuad =
     ]
 petlaKierowcy :: MVar (M.Map String Kierowca) -> String -> IO ()
 petlaKierowcy mv idK = do
-          threadDelay 1000000
-          deltaLat <- randomRIO (-0.01 ,0.01) :: IO Double
-          deltaLon <- randomRIO (-0.01, 0.01)  :: IO Double
+          threadDelay 100000000
+          deltaLat <- randomRIO (-0.001 ,0.001) :: IO Double
+          deltaLon <- randomRIO (-0.001, 0.001)  :: IO Double
           inside <- readMVar mv 
           let kierowca = inside M.! idK 
           case (cel kierowca) of 
@@ -60,6 +60,7 @@ petlaKierowcy mv idK = do
                                                 case celKoncowy kierowca of
                                                   Nothing -> modifyMVar_ mv (\mapa -> pure (M.insert idK (Kierowca {idKierowcy = idK, lat = nowy_lat ,lon = nowy_lon ,cel = Nothing,celKoncowy = Nothing,wolne_miejsca = (wolne_miejsca kierowca )}) mapa ))
                                                   (Just (lat_cel,lon_cel)) -> 
+                                                    
                                                     modifyMVar_ mv (\mapa -> pure (M.insert idK (Kierowca 
                                                     {idKierowcy = idK ,lat=nowy_lat ,lon=nowy_lon ,cel = Just (lat_cel ,lon_cel ),
                                                     celKoncowy=Nothing,wolne_miejsca= (wolne_miejsca kierowca )}) mapa))

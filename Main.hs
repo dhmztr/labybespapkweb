@@ -27,7 +27,7 @@ import Servant.Swagger (toSwagger)
 import Servant.Swagger.UI (SwaggerSchemaUI, swaggerSchemaUIServer)
 import Types (WylogujReq)
 import System.Random (randomRIO)
-import Cars (petlaKierowcy)
+import Cars (petlaKierowcy, inPolygon, cityQuad)
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime)
 import Data.Bool (Bool)
 import Data.Time (getCurrentTime)
@@ -35,6 +35,7 @@ import Network.Wai (Middleware,remoteHost ,pathInfo ,responseLBS )
 import Network.HTTP.Types (status429)
 
 import Database.Redis qualified as R
+import Distribution.Compat.Prelude (Double)
 
 type FullAPI = API :<|> SwaggerSchemaUI "swagger-ui" "swagger.json" :<|> Raw
 
@@ -72,12 +73,21 @@ main = do
 wygeneruj_kierowcow :: [Only Int] -> IO [Kierowca]
 wygeneruj_kierowcow [] = return []
 wygeneruj_kierowcow (ident:reszta) = do
-                        lat_start<- randomRIO (51.05,51.15)
-                        lon_start <- randomRIO (16.90,17.10)
+                        (lat_start,lon_start) <- punkt_w_miescie 51.05 51.15 16.90 17.10 
                         miejsca <- randomRIO (2,5)
                         let kierowca = Kierowca {idKierowcy = show (fromOnly (ident)), lat = lat_start,lon = lon_start,cel = Nothing,celKoncowy=Nothing,wolne_miejsca = miejsca }
                         reszta_kierowcow <- liftIO( wygeneruj_kierowcow reszta )
                         return (kierowca:reszta_kierowcow )
+punkt_w_miescie :: Double -> Double -> Double -> Double -> IO (Double,Double)
+punkt_w_miescie lat1 lat2 lon1 lon2  = do
+                      wygenerowany_lat <- randomRIO (lat1,lat2)
+                      wygenerowany_lon <- randomRIO (lon1,lon2)
+
+                      if inPolygon cityQuad (wygenerowany_lat ,wygenerowany_lon )
+                        then return (wygenerowany_lat,wygenerowany_lon)
+                        else do
+                            punkt <- punkt_w_miescie lat1 lat2 lon1 lon2
+                            return punkt
 
 
 
