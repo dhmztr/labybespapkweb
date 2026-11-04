@@ -397,11 +397,12 @@ przetworz msg model =
             ( { model | stan = Wysylanie }, zaloguj model.email model.haslo )
 
         Zarejestruj ->
-            if model.haslo /= model.powtorz then
-                ( { model | stan = Formularz (Just "Hasła nie są takie same.") }, Cmd.none )
+            case sprawdzRejestracje model.email model.haslo model.powtorz of
+                Just problem ->
+                    ( { model | stan = Formularz (Just problem) }, Cmd.none )
 
-            else
-                ( { model | stan = Wysylanie }, zarejestruj model.email model.haslo )
+                Nothing ->
+                    ( { model | stan = Wysylanie }, zarejestruj model.email model.haslo )
 
         OdpowiedzLogin (Ok token) ->
             ( model, pobierzJa token )
@@ -414,7 +415,7 @@ przetworz msg model =
             ( model, pobierzJa token )
 
         OdpowiedzRejestracja (Err blad) ->
-            ( { model | stan = Formularz (Just (opisBledu blad)) }, Cmd.none )
+            ( { model | stan = Formularz (Just (opisBleduRejestracji blad)) }, Cmd.none )
 
         OdpowiedzJa token (Ok ja) ->
             ( { model | haslo = "", powtorz = "", stan = Zalogowany (nowaSesja model token ja) }
@@ -795,6 +796,61 @@ zaokr4 x =
     String.fromFloat (toFloat (round (x * 10000)) / 10000)
 
 
+{-| Backend odrzuca hasła krótsze niż 9 znaków i e-maile bez formy a@b.c (400);
+te same reguły sprawdzamy lokalnie, żeby nie marnować próby z limitu.
+-}
+minDlugoscHasla : Int
+minDlugoscHasla =
+    9
+
+
+poprawnyEmail : String -> Bool
+poprawnyEmail email =
+    case String.split "@" email of
+        [ lokalna, domena ] ->
+            let
+                bezSpacji s =
+                    not (String.isEmpty s) && not (String.contains " " s)
+            in
+            bezSpacji lokalna
+                && bezSpacji domena
+                && (case String.split "." domena of
+                        czesci ->
+                            List.length czesci >= 2 && List.all (not << String.isEmpty) czesci
+                   )
+
+        _ ->
+            False
+
+
+sprawdzRejestracje : String -> String -> String -> Maybe String
+sprawdzRejestracje email haslo powtorz =
+    if not (poprawnyEmail email) then
+        Just "Podaj poprawny adres e-mail."
+
+    else if String.length haslo < minDlugoscHasla then
+        Just ("Hasło jest za krótkie — minimum " ++ String.fromInt minDlugoscHasla ++ " znaków.")
+
+    else if haslo /= powtorz then
+        Just "Hasła nie są takie same."
+
+    else
+        Nothing
+
+
+opisBleduRejestracji : Http.Error -> String
+opisBleduRejestracji blad =
+    case blad of
+        Http.BadStatus 400 ->
+            "Niepoprawny e-mail albo hasło krótsze niż " ++ String.fromInt minDlugoscHasla ++ " znaków."
+
+        Http.BadStatus 409 ->
+            "Konto z tym adresem e-mail już istnieje. Zaloguj się."
+
+        _ ->
+            opisBledu blad
+
+
 opisBledu : Http.Error -> String
 opisBledu blad =
     case blad of
@@ -802,7 +858,7 @@ opisBledu blad =
             "Nieprawidłowy e-mail lub hasło."
 
         Http.BadStatus 409 ->
-            "Rejestracja nie powiodła się, spróbuj ponownie."
+            "Konto z tym adresem e-mail już istnieje."
 
         Http.BadStatus 429 ->
             "Za dużo prób naraz. Odczekaj 10 sekund i spróbuj ponownie."
@@ -1702,13 +1758,16 @@ panelKonta model =
             , type_ "password"
             , attribute "autocomplete" (napis "current-password" "new-password")
             , required True
+            , attribute "minlength" (napis "" (String.fromInt minDlugoscHasla))
             , value model.haslo
             , onInput WpisanoHaslo
             ]
             []
          ]
             ++ (if rejestracja then
-                    [ label [ for "powtorz" ] [ text "Powtórz hasło" ]
+                    [ p [ class "podpowiedz" ]
+                        [ text ("Hasło: minimum " ++ String.fromInt minDlugoscHasla ++ " znaków.") ]
+                    , label [ for "powtorz" ] [ text "Powtórz hasło" ]
                     , input
                         [ id "powtorz"
                         , type_ "password"
