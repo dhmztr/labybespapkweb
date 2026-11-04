@@ -240,15 +240,19 @@ dodajKomentarz rconn pool authtoken kom = do
                                                                 else do 
                                                              let ridequery = "SELECT id from rides WHERE client_id = ? And vehicle_id = ?"
                                                              let idusera = head (map fromOnly iduseraraw)
-                                                             iloscraw <- liftIO ( withResource pool $ \conn -> try (execute conn ridequery (idusera, (read (idKier kom)) :: Int )) :: IO (Either SqlError Int64))
+                                                             iloscraw <- liftIO ( withResource pool $ \conn -> try (query conn ridequery (idusera, (read (idKier kom)) :: Int )) :: IO (Either SqlError [Only Int]))
                                                              case iloscraw of 
                                                                 (Left _) -> throwError err500 
-                                                                (Right ilosc) -> if ilosc >= 1 then do 
-                                                                                let query = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
-                                                                                operacja <- liftIO (withResource pool $ \conn -> try (execute conn query ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),usermail, tresc poprawnykom)))
-                                                                                case operacja  of
-                                                                                 Left (e :: SqlError ) -> throwError err500 
-                                                                                 (Right _) ->  return "OK"
+                                                                (Right wpisy) -> if length wpisy >= 1 then do 
+                                                                                let ilosc = head (map fromOnly wpisy)
+                                                                                if ilosc >= 1 then do  
+                                                                                 let query = "INSERT INTO komentarze (idKier,data,ocena,wystawiajacy,tresc) Values (?,?,?,?,?)"
+                                                                                 operacja <- liftIO (withResource pool $ \conn -> try (execute conn query ((idKier poprawnykom) ,(czasotrzymania poprawnykom ),(ocena poprawnykom),usermail, tresc poprawnykom)))
+                                                                                 case operacja  of
+                                                                                  Left (e :: SqlError ) -> throwError err500 
+                                                                                  (Right _) ->  return "OK"
+                                                                                else
+                                                                                 throwError err403 
                                                                         else
                                                                             throwError err403 
                                         Nothing -> throwError err401 
