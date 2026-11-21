@@ -111,6 +111,8 @@ metadata:
   namespace: unter
 spec:
   replicas: 1
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: postgres
@@ -119,11 +121,21 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        fsGroup: 70
+        appArmorProfile:
+          type: Unconfined
       containers:
         - name: postgres
           image: postgres:16-alpine
+          securityContext:
+            runAsUser: 70
+            runAsGroup: 70
           ports:
             - containerPort: 5432
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           envFrom:
             - secretRef:
                 name: postgres-credentials
@@ -180,13 +192,6 @@ spec:
           image: redis:7-alpine
           ports:
             - containerPort: 6379
-          command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)"]
-          env:
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: redis-credentials
-                  key: REDIS_PASSWORD
           readinessProbe:
             tcpSocket:
               port: 6379
