@@ -12,9 +12,11 @@ import Control.Monad.IO.Class (MonadIO (liftIO))
 import Crypto.Random (MonadRandom (getRandomBytes))
 import Data.Aeson
 import Data.ByteString qualified as BS
+import Data.ByteString.Char8 qualified as BS8
 import Data.ByteString.Lazy.Char8 qualified as BL8
 import Data.Char (intToDigit)
 import Data.Map qualified as M
+import Data.Maybe (fromMaybe)
 import Data.Password.Argon2
 import Data.Swagger (Swagger, ToSchema)
 import Data.Text qualified as T
@@ -26,12 +28,14 @@ import Servant
 import Servant.Swagger (toSwagger)
 import Servant.Swagger.UI (SwaggerSchemaUI, swaggerSchemaUIServer)
 import Types (WylogujReq)
+import System.Environment (lookupEnv)
 import System.Random (randomRIO)
+import Text.Read (readMaybe)
 import Cars (petlaKierowcy, inPolygon, cityQuad)
 import Data.Time.Clock (NominalDiffTime, UTCTime, diffUTCTime)
 import Data.Bool (Bool)
 import Data.Time (getCurrentTime)
-import Network.Wai (Middleware,remoteHost ,pathInfo ,responseLBS )
+import Network.Wai (Middleware,remoteHost ,pathInfo ,responseLBS ,requestHeaders )
 import Network.HTTP.Types (status429)
 
 import Database.Redis qualified as R
@@ -64,7 +68,11 @@ main = do
   kierowcy <- wygeneruj_kierowcow kierowcy_wiersze 
   let map_kierowcow = M.fromList [(idKierowcy k,k) | k <- kierowcy ]
   mvkierowcy <- newMVar map_kierowcow 
-  redisConn <- R.connect  R.defaultConnectInfo {R.connectHost = "redis", R.connectPort = R.PortNumber 6379}
+  mRedisHost <- lookupEnv "REDIS_HOST"
+  mRedisPort <- lookupEnv "REDIS_PORT"
+  let redisHost = fromMaybe "redis" mRedisHost
+      redisPort = fromMaybe (6379 :: Int) (mRedisPort >>= readMaybe)
+  redisConn <- R.connect  R.defaultConnectInfo {R.connectHost = redisHost, R.connectPort = R.PortNumber (fromIntegral redisPort)}
   mvlimiter <- newMVar M.empty 
   mapM_ (\k -> forkIO (petlaKierowcy mvkierowcy (idKierowcy k))) map_kierowcow 
   run 8080 (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer redisConn przejazdy mvkierowcy pool)))
@@ -116,11 +124,11 @@ limiterIP :: MVar (M.Map String (UTCTime,Int)) -> Middleware
 limiterIP mv app req respond =
  if pathInfo req `elem` [["login"], ["rejestracja"], ["wystawkomentarz"], ["zamowienie"]]
   then do 
-        let ip = takeWhile (/= ':') (show (remoteHost req))
+        let ip = case lookup "X-Forwarded-For" (requestHeaders req) of
+                   Just xff -> BS8.unpack (BS8.takeWhile (/= ',') xff)
+                   Nothing  -> takeWhile (/= ':') (show (remoteHost req))
         dozwolone <- sprawdzCooldown mv ip 5 10
         if dozwolone
           then app req respond
           else respond (responseLBS status429 [] "Za duzo zapytan")
       else app req respond
-                        
-                     

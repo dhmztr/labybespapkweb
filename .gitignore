@@ -27,3 +27,11 @@ elm-stuff/
 !frontend/public/app.js
 !frontend/public/img/
 !frontend/public/img/*.jpg
+
+# Terraform
+!*.tf
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform.lock.hcl
