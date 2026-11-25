@@ -20,7 +20,7 @@ resource "aws_internet_gateway" "main" {
   }
 }
 
-# Podsieci publiczne (ALB + ECS Fargate z restrykcyjnym SG)
+# Podsieci publiczne (ALB)
 resource "aws_subnet" "public_a" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "10.0.1.0/24"
@@ -41,6 +41,40 @@ resource "aws_subnet" "public_b" {
   tags = {
     Name = "${var.project_name}-public-b"
   }
+}
+
+
+# Osobne podsieci dla warstwy aplikacji (ECS Fargate)
+resource "aws_subnet" "app_a" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.11.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-app-a"
+  }
+}
+
+resource "aws_subnet" "app_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "10.0.12.0/24"
+  availability_zone       = data.aws_availability_zones.available.names[1]
+  map_public_ip_on_launch = true
+
+  tags = {
+    Name = "${var.project_name}-app-b"
+  }
+}
+
+resource "aws_route_table_association" "app_a" {
+  subnet_id      = aws_subnet.app_a.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_route_table_association" "app_b" {
+  subnet_id      = aws_subnet.app_b.id
+  route_table_id = aws_route_table.public.id
 }
 
 # Podsieci prywatne (RDS + ElastiCache, brak trasy do internetu)
@@ -112,8 +146,8 @@ resource "aws_security_group" "alb" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port   = 80
-    to_port     = 80
+    from_port   = 443
+    to_port     = 443
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }

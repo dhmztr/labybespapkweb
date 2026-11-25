@@ -26,3 +26,13 @@ variable "project_name" {
   type    = string
   default = "unter"
 }
+
+variable "domain_name" {
+  type        = string
+  description = "Publiczna domena aplikacj"
+}
+
+variable "alert_email" {
+  type        = string
+  description = "Adres e-mail do alertow kosztow (AWS Budgets)"
+}

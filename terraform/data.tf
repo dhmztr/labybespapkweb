@@ -38,9 +38,12 @@ resource "aws_db_instance" "postgres" {
   vpc_security_group_ids = [aws_security_group.db.id]
   publicly_accessible    = false
   multi_az               = false
-  backup_retention_period = 0
+  backup_retention_period = 1
   skip_final_snapshot    = true
   deletion_protection    = false
+  backup_window           = "03:00-04:00"
+  apply_immediately       = true
+
 }
 
 # ElastiCache Redis (single-node, cache.t4g.micro)

@@ -37,6 +37,12 @@ import Data.Bool (Bool)
 import Data.Time (getCurrentTime)
 import Network.Wai (Middleware,remoteHost ,pathInfo ,responseLBS ,requestHeaders )
 import Network.HTTP.Types (status429)
+import Control.Monad (when)
+import System.IO (hFlush, stdout)
+import Network.Wai (Middleware, remoteHost, pathInfo, responseLBS, requestHeaders, requestMethod, responseStatus)
+import Network.HTTP.Types (status429, statusCode)
+
+
 
 import Database.Redis qualified as R
 import Distribution.Compat.Prelude (Double)
@@ -75,8 +81,7 @@ main = do
   redisConn <- R.connect  R.defaultConnectInfo {R.connectHost = redisHost, R.connectPort = R.PortNumber (fromIntegral redisPort)}
   mvlimiter <- newMVar M.empty 
   mapM_ (\k -> forkIO (petlaKierowcy mvkierowcy (idKierowcy k))) map_kierowcow 
-  run 8080 (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer redisConn przejazdy mvkierowcy pool)))
-
+  run 8080 (loggerMiddleware (limiterIP mvlimiter (serve (Proxy :: Proxy FullAPI) (serwer redisConn przejazdy mvkierowcy pool))))
 
 wygeneruj_kierowcow :: [Only Int] -> IO [Kierowca]
 wygeneruj_kierowcow [] = return []
@@ -132,3 +137,23 @@ limiterIP mv app req respond =
           then app req respond
           else respond (responseLBS status429 [] "Za duzo zapytan")
       else app req respond
+
+loggerMiddleware :: Middleware
+loggerMiddleware app req respond = app req $ \res -> do
+  let code = statusCode (responseStatus res)
+      path = pathInfo req
+      ip = case lookup "X-Forwarded-For" (requestHeaders req) of
+             Just xff -> BS8.unpack (BS8.takeWhile (/= ',') xff)
+             Nothing  -> takeWhile (/= ':') (show (remoteHost req))
+  when (code >= 400) $ do
+    teraz <- getCurrentTime
+    let tag
+          | path == ["login"] && code `elem` [400, 401, 403] = "AUTH_FAILED"
+          | code >= 500                                      = "APP_ERROR"
+          | otherwise                                        = "HTTP_ERROR"
+    putStrLn $ show teraz ++ " [" ++ tag ++ "] status=" ++ show code
+      ++ " method=" ++ BS8.unpack (requestMethod req)
+      ++ " path=/" ++ T.unpack (T.intercalate "/" path)
+      ++ " ip=" ++ ip
+    hFlush stdout
+  respond res

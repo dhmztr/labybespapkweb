@@ -1,5 +1,5 @@
 output "app_url" {
-  value = "http://${aws_lb.main.dns_name}"
+  value = "https://${var.domain_name}"
 }
 
 output "alb_dns_name" {
@@ -24,4 +24,14 @@ output "ecs_cluster_name" {
 
 output "ecs_service_name" {
   value = aws_ecs_service.app.name
+}
+
+output "acm_dns_validation_records" {
+  value = [
+    for dvo in aws_acm_certificate.app.domain_validation_options : {
+      name  = dvo.resource_record_name
+      type  = dvo.resource_record_type
+      value = dvo.resource_record_value
+    }
+  ]
 }
